@@ -50,36 +50,29 @@ with st.form("chat_form", clear_on_submit=True):
     submitted = st.form_submit_button("Send")
 
 if submitted and user_input:
-    result = process_user_input(prompt)
+    # 1️⃣ Call core logic
+    result = process_user_input(user_input)
 
-ai_text = result.get("response")
-status = result.get("status", "Unknown")
+    ai_text = result.get("response")
+    status = result.get("status", "Unknown")
 
-if ai_text:
-    st.session_state.messages.append(
-        {"role": "assistant", "content": ai_text}
-    )
-else:
-    # 🔥 THIS is what you are missing
-    st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": f"⚠️ System status: {status}. Please try again shortly."
-        }
-    )
-
-
-
-    st.session_state.status = result.get("status")
+    # 2️⃣ Save status + mode for sidebar
+    st.session_state.status = status
     st.session_state.mode = result.get("mode")
 
-
+    # 3️⃣ Save user message
     st.session_state.chat.append(("You", user_input))
 
-    if result.get("response"):
-        st.session_state.chat.append(("AI", result["response"]))
+    # 4️⃣ Save AI message (or fallback)
+    if ai_text:
+        st.session_state.chat.append(("AI", ai_text))
     else:
-        st.warning(f"Status: {result.get('status', 'Unknown')}")
+        st.session_state.chat.append(
+            ("AI", f"⚠️ System status: {status}. Please try again shortly.")
+        )
+
+    st.experimental_rerun()
+
 
 
 # --- Render chat ---
