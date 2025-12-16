@@ -2,6 +2,9 @@ CURRENT_MODE = "personal"  # personal | trading
 UI_STATUS = "Online"  # Online | Rate-limited | Offline
 
 
+import os
+print("RouteLLM key loaded:", bool(os.getenv("ROUTELLM_API_KEY")))
+
 
 import json
 import os
