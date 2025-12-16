@@ -524,11 +524,6 @@ def handle_memory_command(user_input, core_memory):
             return f"I've saved this: {fact}"
 
     return None
-def get_openrouter_api_key():
-    return (
-        os.getenv("OPENROUTER_API_KEY")
-        or st.secrets.get("OPENROUTER_API_KEY", None)
-    )
 
 
 def show_preferences(working_memory):
@@ -953,13 +948,6 @@ def render_error_banner(console, message, level="warning"):
     )
 
 def process_user_input(user_input: str) -> dict:
-    api_key = get_openrouter_api_key()
-
-    if not api_key:
-     return {
-        "error": "OpenRouter API key not configured"
-        }
-
     """
     Safe adapter for external UIs (Streamlit, API, etc.)
 
