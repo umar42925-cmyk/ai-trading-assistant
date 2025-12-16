@@ -3,3 +3,4 @@ requests
 rich
 python-dotenv
 fyers-apiv3
+rich

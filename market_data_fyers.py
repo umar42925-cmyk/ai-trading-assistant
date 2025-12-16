@@ -15,11 +15,14 @@ class FyersMarketData:
         if not access_token:
             raise ValueError("FYERS access token is required")
 
+        fyersModel = get_fyers_model()   # 👈 THIS WAS MISSING
+
         self.fyers = fyersModel.FyersModel(
-            client_id=app_id,
-            token=access_token,
-            log_path=""
+         client_id=app_id,
+         token=access_token,
+         log_path=""
         )
+
 
     def fetch_live_quote(self, symbol: str) -> dict:
         try:
