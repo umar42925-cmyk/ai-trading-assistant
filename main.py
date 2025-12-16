@@ -6,6 +6,12 @@ UI_STATUS = "Online"  # Online | Rate-limited | Offline
 import json
 import os
 import streamlit as st
+import os
+import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()  # safe: does nothing on Streamlit Cloud
+
 from datetime import datetime
 import requests
 
@@ -433,7 +439,7 @@ Rules:
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=60
+            timeout=30
         )
         response.raise_for_status()
         data = response.json()
@@ -517,6 +523,12 @@ def handle_memory_command(user_input, core_memory):
             return f"I've saved this: {fact}"
 
     return None
+def get_openrouter_api_key():
+    return (
+        os.getenv("OPENROUTER_API_KEY")
+        or st.secrets.get("OPENROUTER_API_KEY", None)
+    )
+
 
 def show_preferences(working_memory):
     observations = working_memory.get("observations", [])
@@ -935,6 +947,13 @@ def render_error_banner(console, message, level="warning"):
     )
 
 def process_user_input(user_input: str) -> dict:
+    api_key = get_openrouter_api_key()
+
+    if not api_key:
+     return {
+        "error": "OpenRouter API key not configured"
+        }
+
     """
     Safe adapter for external UIs (Streamlit, API, etc.)
 

@@ -32,6 +32,14 @@ st.set_page_config(
 
 st.title("📈 AI Trading Assistant")
 
+from main import get_openrouter_api_key
+
+if get_openrouter_api_key():
+    st.sidebar.success("OpenRouter: Connected")
+else:
+    st.sidebar.error("OpenRouter: Missing API key")
+
+
 # --- Chat state ---
 if "chat" not in st.session_state:
     st.session_state.chat = []
