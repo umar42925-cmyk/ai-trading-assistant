@@ -355,7 +355,6 @@ Memory should remain minimal, factual, and reversible.
 """
 
 from openai import OpenAI
-from routellm import RouteLLM
 
 _llm = None
 
