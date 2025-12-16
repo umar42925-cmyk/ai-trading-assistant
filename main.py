@@ -256,7 +256,7 @@ The Agent **must not depend** on a specific model.
 
 Current preference:
 
-* RouteLLM
+* RouteLLM-based models
 
 Rules:
 
@@ -362,13 +362,15 @@ def get_llm():
 
     from routellm import RouteLLM
 
+    print("ROUTELLM_API_KEY loaded:", bool(os.getenv("ROUTELLM_API_KEY")))
+
     _llm = RouteLLM(
         api_key=os.getenv("ROUTELLM_API_KEY"),
         strategy="quality"
     )
 
     return _llm
-
+ 
 
 
 def routellm_think(user_input, working_memory, core_memory):
