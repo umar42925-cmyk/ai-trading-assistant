@@ -1,5 +1,8 @@
 streamlit
-requests
 python-dotenv
+requests==2.31.0
 fyers-apiv3
 rich
+
+routellm
+openai
