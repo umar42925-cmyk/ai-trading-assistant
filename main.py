@@ -360,23 +360,32 @@ _llm = None
 
 def get_llm():
     global _llm
-    if _llm is None:
-        try:
-            from routellm import RouteLLM
-            from openai import OpenAI
-        except Exception as e:
-            raise RuntimeError(
-                "RouteLLM is not available in this environment"
-            ) from e
+    if _llm is not None:
+        return _llm
+
+    # Try RouteLLM first
+    try:
+        from routellm import RouteLLM
+        from openai import OpenAI
 
         _llm = RouteLLM(
             api_key=os.getenv("ROUTELLM_API_KEY"),
-            providers={
-                "openai": OpenAI()
-            },
+            providers={"openai": OpenAI()},
             strategy="quality"
         )
-    return _llm
+        return _llm
+
+    except Exception:
+        # Fallback to OpenAI directly
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        class OpenAIFallback:
+            def chat(self, *args, **kwargs):
+                return client.chat.completions.create(*args, **kwargs)
+
+        return OpenAIFallback()
+
 
 
 def routellm_think(user_input, working_memory, core_memory):
