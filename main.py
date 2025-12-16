@@ -373,18 +373,22 @@ def get_llm():
             providers={"openai": OpenAI()},
             strategy="quality"
         )
+        _llm._is_route = True
         return _llm
 
     except Exception:
-        # Fallback to OpenAI directly
         from openai import OpenAI
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
         class OpenAIFallback:
-            def chat(self, *args, **kwargs):
-                return client.chat.completions.create(*args, **kwargs)
+            _is_route = False
 
-        return OpenAIFallback()
+            def create(self, **kwargs):
+                return client.chat.completions.create(**kwargs)
+
+        _llm = OpenAIFallback()
+        return _llm
+
 
 
 
