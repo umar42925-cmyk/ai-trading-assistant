@@ -354,19 +354,19 @@ Memory should remain minimal, factual, and reversible.
 
 """
 
-
-from abacusai import ApiClient
 import os
+from openai import OpenAI
 
-_client = None
+_llm = None
 
 def get_llm():
-    global _client
-    if _client is None:
-        _client = ApiClient(
-            api_key=os.getenv("ABACUS_API_KEY")
+    global _llm
+    if _llm is None:
+        _llm = OpenAI(
+            api_key=os.getenv("ABACUS_API_KEY"),
+            base_url="https://abacus.ai/app/route-llm-apis"
         )
-    return _client
+    return _llm
 
  
 
@@ -404,13 +404,14 @@ Rules:
         },
         {"role": "user", "content": user_input},
     ]
-
-    response = client.route_llm(
-        prompt=user_input,
-        strategy="quality"
+    response = client.chat.completions.create(
+        model="routellm-default",   # MUST match what Abacus UI shows
+        messages=messages,
+        temperature=0.6,
     )
 
-    return response["output"]
+    return response.choices[0].message.content
+
 
 
 def auto_journal_trading(user_input, model_response):
