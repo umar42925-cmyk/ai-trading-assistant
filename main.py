@@ -1025,10 +1025,10 @@ def process_user_input(user_input: str) -> dict:
             bias_memory
         )
         ai_response = clean_ai_output(response)
-        UI_STATUS = "Online"
-    except Exception:
-        UI_STATUS = "Rate-limited"
-        ai_response = None
+        UI_STATUS = "Online" if ai_response else "Error"
+    except Exception as e:
+        UI_STATUS = "Error"
+        ai_response = f"⚠️ LLM error: {str(e)}"
 
     return {
         "response": ai_response,
