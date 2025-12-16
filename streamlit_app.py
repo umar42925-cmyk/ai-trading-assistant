@@ -50,7 +50,24 @@ with st.form("chat_form", clear_on_submit=True):
     submitted = st.form_submit_button("Send")
 
 if submitted and user_input:
-    result = process_user_input(user_input)
+    result = process_user_input(prompt)
+
+ai_text = result.get("response")
+status = result.get("status", "Unknown")
+
+if ai_text:
+    st.session_state.messages.append(
+        {"role": "assistant", "content": ai_text}
+    )
+else:
+    # 🔥 THIS is what you are missing
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": f"⚠️ System status: {status}. Please try again shortly."
+        }
+    )
+
 
 
     st.session_state.status = result.get("status")
