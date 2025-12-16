@@ -6,3 +6,4 @@ rich
 
 routellm
 openai
+abacusai
