@@ -354,7 +354,6 @@ Memory should remain minimal, factual, and reversible.
 
 """
 
-_llm = None
 
 def get_llm():
     global _llm
@@ -365,11 +364,6 @@ def get_llm():
 
     _llm = RouteLLM(
         api_key=os.getenv("ROUTELLM_API_KEY"),
-        providers={
-            "openrouter": {
-                "api_key": os.getenv("ROUTELLM_API_KEY")
-            }
-        },
         strategy="quality"
     )
 
@@ -412,7 +406,7 @@ Rules:
     ]
 
     response = llm.chat.completions.create(
-         model="route-llm",
+         model="default",
          messages=messages,
          temperature=0.6,
          )
