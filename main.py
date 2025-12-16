@@ -11,6 +11,26 @@ import requests
 
 os.makedirs("memory", exist_ok=True)
 
+def load_json(path, default):
+    """
+    Safely load a JSON file.
+    If missing or corrupted, return default.
+    """
+    if not os.path.exists(path):
+        return default
+
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return default
+MEMORY_FILE = "memory.json"
+
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
 working_memory = load_json(
         "memory/working_memory.json",
         {"observations": []}
@@ -467,24 +487,8 @@ def auto_journal_trading(user_input, model_response):
     journal["entries"].append(entry)
     save_json(journal_path, journal)
 
-def load_json(path, default):
-    """
-    Safely load a JSON file.
-    If missing or corrupted, return default.
-    """
-    if not os.path.exists(path):
-        return default
 
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        return default
-MEMORY_FILE = "memory.json"
 
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
