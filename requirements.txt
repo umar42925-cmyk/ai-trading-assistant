@@ -1,0 +1,5 @@
+streamlit
+requests
+rich
+python-dotenv
+fyers-apiv3
