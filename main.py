@@ -1,11 +1,6 @@
 CURRENT_MODE = "personal"  # personal | trading
 UI_STATUS = "Online"  # Online | Rate-limited | Offline
 
-
-import os
-print("RouteLLM key loaded:", bool(os.getenv("ROUTELLM_API_KEY")))
-
-
 import json
 import os
 import streamlit as st
@@ -16,7 +11,6 @@ from dotenv import load_dotenv
 load_dotenv()  # safe: does nothing on Streamlit Cloud
 
 from datetime import datetime
-import requests
 
 os.makedirs("memory", exist_ok=True)
 
@@ -262,7 +256,7 @@ The Agent **must not depend** on a specific model.
 
 Current preference:
 
-* OpenRouter → `mistralai/mistral-7b-instruct:free`
+* RouteLLM
 
 Rules:
 
@@ -378,11 +372,9 @@ def get_llm():
     return _llm
 
 
-
-
-def ollama_think(user_input, working_memory, core_memory):
+def routellm_think(user_input, working_memory, core_memory):
     llm = get_llm()
-
+    
     if CURRENT_MODE == "trading":
         role_prompt = """
 You are a trading assistant and productivity partner.
@@ -397,35 +389,6 @@ You are a personal assistant and thinking partner.
 Rules:
 - Structured, calm, practical
 """
-
-    messages = [
-        {"role": "system", "content": AGENT_CONSTITUTION.strip()},
-        {"role": "system", "content": MEMORY_POLICY.strip()},
-        {"role": "system", "content": role_prompt.strip()},
-        {
-            "role": "system",
-            "content": "Personal observations:\n"
-            + json.dumps(working_memory.get("observations", []), indent=2)
-        },
-        {
-            "role": "system",
-            "content": "Core facts:\n"
-            + json.dumps(core_memory.get("facts", []), indent=2)
-        },
-        {"role": "user", "content": user_input},
-    ]
-
-    response = llm.chat.completions.create(
-        model="route-llm",
-        messages=messages,
-        temperature=0.7,
-    )
-
-    return response.choices[0].message.content.strip()
-
-
-def routellm_think(user_input, working_memory, core_memory):
-    llm = get_llm()
 
     messages = [
         {"role": "system", "content": AGENT_CONSTITUTION.strip()},
@@ -899,7 +862,7 @@ def handle_slash_command(command, console):
             console=console,
             mode=CURRENT_MODE.capitalize(),
             memory_on=True,
-            brain="OpenRouter",
+            brain="RouteLLM",
             status="Online"
         )
         return None  # nothing to render as AI message
@@ -910,7 +873,7 @@ def handle_slash_command(command, console):
             f"**Status:** Online\n"
             f"**Mode:** {CURRENT_MODE.capitalize()}\n"
             f"**Memory:** ON\n"
-            f"**Brain:** OpenRouter"
+            f"**Brain:** RouteLLM"
         )
 
     # --- MODE QUERY ---
@@ -1048,7 +1011,7 @@ def main():
         console=console,
         mode=CURRENT_MODE.capitalize(),
         memory_on=True,
-        brain="OpenRouter",
+        brain="RouteLLM",
         status=UI_STATUS
     )
 
@@ -1157,7 +1120,7 @@ def main():
 
         if any(t in lower for t in reflective_identity_triggers):
             ai_response = clean_ai_output(
-                ollama_think(user_input, working_memory, core_memory)
+                routellm_think(user_input, working_memory, core_memory)
             )
             # prevent fallback LLM call
 
@@ -1201,10 +1164,10 @@ def main():
         else:
              model_response = ai_response
         if not ai_response:
-            UI_STATUS = "Rate-limited"
+            UI_STATUS = "Error"
             render_error_banner(
-               console,
-               "You are temporarily rate-limited.\nPlease wait a moment before trying again."
+                console,
+                "LLM error. Please try again."
             )
             continue
         UI_STATUS = "Online"
