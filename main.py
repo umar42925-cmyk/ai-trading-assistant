@@ -893,7 +893,11 @@ def handle_slash_command(command, console):
 
     # --- CLEAR ---
     if cmd == "/clear":
+       try:
         console.clear()
+       except Exception:
+        pass
+
         render_header(
             console=console,
             mode=CURRENT_MODE.capitalize(),
@@ -1045,7 +1049,11 @@ def process_user_input(user_input: str) -> dict:
 
 def main():
     global CURRENT_MODE, UI_STATUS
-    console.clear()
+    try:
+     console.clear()
+    except Exception:
+     pass
+
     render_header(
         console=console,
         mode=CURRENT_MODE.capitalize(),
