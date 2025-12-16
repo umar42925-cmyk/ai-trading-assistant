@@ -360,6 +360,24 @@ Memory should remain minimal, factual, and reversible.
 
 """
 
+from openai import OpenAI
+from routellm import RouteLLM
+
+_llm = None
+
+def get_llm():
+    global _llm
+    if _llm is None:
+        _llm = RouteLLM(
+            api_key=os.getenv("ROUTELLM_API_KEY"),
+            providers={
+                "openai": OpenAI()
+            },
+            strategy="quality"
+        )
+    return _llm
+
+
 
 
 def ollama_think(user_input, working_memory, core_memory):
@@ -453,6 +471,34 @@ Rules:
         if "429" in str(e):
          return None
         return f"OpenRouter error: {e}"
+
+def routellm_think(user_input, working_memory, core_memory):
+    llm = get_llm()
+
+    messages = [
+        {"role": "system", "content": AGENT_CONSTITUTION.strip()},
+        {"role": "system", "content": MEMORY_POLICY.strip()},
+        {
+            "role": "system",
+            "content": "Personal observations:\n"
+            + json.dumps(working_memory.get("observations", []), indent=2)
+        },
+        {
+            "role": "system",
+            "content": "Core facts:\n"
+            + json.dumps(core_memory.get("facts", []), indent=2)
+        },
+        {"role": "user", "content": user_input},
+    ]
+
+    response = llm.chat.completions.create(
+        model="route-llm",
+        messages=messages,
+        temperature=0.6,
+    )
+
+    return response.choices[0].message.content.strip()
+
 
 
 def auto_journal_trading(user_input, model_response):
@@ -691,7 +737,8 @@ def reasoning_layer(user_input, working_memory, core_memory, bias_memory):
         last_presented_traits = []
         return "Understood. I’ve removed those traits."
 
-    return ollama_think(user_input, working_memory, core_memory)
+    return routellm_think(user_input, working_memory, core_memory)
+
 
 def show_core_facts(core_memory):
     facts = core_memory.get("facts", [])
