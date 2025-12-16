@@ -1,5 +1,12 @@
-from fyers_apiv3 import fyersModel
 from datetime import datetime
+
+
+def get_fyers_model():
+    try:
+        from fyers_apiv3 import fyersModel
+        return fyersModel
+    except ImportError as e:
+        raise ImportError("fyers-apiv3 not installed") from e
 
 class FyersMarketData:
     def __init__(self, app_id: str, access_token: str):
@@ -39,3 +46,4 @@ class FyersMarketData:
 
         except Exception:
             return {"error": "FETCH_FAILED"}
+

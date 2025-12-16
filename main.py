@@ -1,5 +1,46 @@
+def load_json(path, default):
+    """
+    Safely load a JSON file.
+    If missing or corrupted, return default.
+    """
+    if not os.path.exists(path):
+        return default
+
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return default
+
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
 CURRENT_MODE = "personal"  # personal | trading
 UI_STATUS = "Online"  # Online | Rate-limited | Offline
+
+working_memory = load_json(
+        "memory/working_memory.json",
+        {"observations": []}
+    )
+
+core_memory = load_json(
+        "memory/core_memory.json",
+        {"facts": []}
+    )
+
+bias_memory = load_json(
+        "Memory/bias.json",
+        {
+            "current": None,
+            "based_on": None,
+            "confidence": None,
+            "invalidated_if": None,
+            "last_invalidated_reason": None,
+            "history": []
+        }
+    )
 
 from symbol_resolver import resolve_symbol
 from market_data_fyers import FyersMarketData
@@ -442,24 +483,7 @@ def auto_journal_trading(user_input, model_response):
     journal["entries"].append(entry)
     save_json(journal_path, journal)
 
-def load_json(path, default):
-    """
-    Safely load a JSON file.
-    If missing or corrupted, return default.
-    """
-    if not os.path.exists(path):
-        return default
-
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        return default
 MEMORY_FILE = "memory.json"
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
@@ -1023,27 +1047,7 @@ def main():
         "[dim]Type 'exit' to quit • Ask about markets, structure, or analysis[/dim]\n"
     )
 
-    working_memory = load_json(
-        "memory/working_memory.json",
-        {"observations": []}
-    )
-
-    core_memory = load_json(
-        "memory/core_memory.json",
-        {"facts": []}
-    )
-
-    bias_memory = load_json(
-        "Memory/bias.json",
-        {
-            "current": None,
-            "based_on": None,
-            "confidence": None,
-            "invalidated_if": None,
-            "last_invalidated_reason": None,
-            "history": []
-        }
-    )
+   
 
     # load persistent memory used by bias commands
 

@@ -1,145 +1,18 @@
-import json
-import os
-from datetime import datetime
+# Python
+__pycache__/
+*.pyc
 
-MEMORY_FILE = "memory.json"
+# Environments
+.env
+*.env
+.venv/
 
+# Streamlit
+.streamlit/secrets.toml
 
-def load_memory():
-    if not os.path.exists(MEMORY_FILE):
-        return {
-            "user_profile": {"role": "trader", "notes": ""},
-            "bias": {
-                "current": None,
-                "based_on": None,
-                "confidence": None,
-                "invalidated_if": None,
-                "last_invalidated_reason": None,
-            },
-            "bias_history": [],
-        }
+# Logs
+*.log
 
-    with open(MEMORY_FILE, "r") as f:
-        return json.load(f)
-
-
-def save_memory(memory):
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(memory, f, indent=2)
-
-
-def handle_bias_command(user_input, memory):
-    text = user_input.lower()
-
-    # REVIEW BIAS HISTORY (most specific first)
-    if text.startswith("review bias history"):
-        history = memory.get("bias_history", [])
-        if not history:
-            return "No bias history yet."
-
-        lines = []
-        for h in history[-10:]:
-            if h["action"] == "set":
-                lines.append(f"[{h['timestamp']}] SET → {h['bias']}")
-            else:
-                lines.append(f"[{h['timestamp']}] INVALIDATE → {h['reason']}")
-
-        return "\n".join(lines)
-
-    # SET BIAS
-    if text.startswith("set bias"):
-        parts = user_input.split()
-
-        try:
-            memory["bias"]["current"] = parts[2]
-
-            if "on" in parts:
-                memory["bias"]["based_on"] = parts[parts.index("on") + 1]
-
-            if "confidence" in parts:
-                memory["bias"]["confidence"] = parts[parts.index("confidence") + 1]
-
-            if "invalidate" in parts:
-                memory["bias"]["invalidated_if"] = " ".join(
-                    parts[parts.index("invalidate") + 1 :]
-                )
-
-            memory["bias_history"].append(
-                {
-                    "action": "set",
-                    "timestamp": datetime.now().isoformat(timespec="seconds"),
-                    "bias": memory["bias"].copy(),
-                }
-            )
-
-            save_memory(memory)
-            return "Bias set and saved."
-
-        except Exception:
-            return "Could not parse bias command."
-
-    # INVALIDATE BIAS
-    if text.startswith("invalidate bias"):
-        reason = user_input.replace("invalidate bias", "").strip()
-
-        memory["bias"]["last_invalidated_reason"] = (
-            reason if reason else "No reason provided"
-        )
-
-        memory["bias_history"].append(
-            {
-                "action": "invalidate",
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-                "reason": memory["bias"]["last_invalidated_reason"],
-            }
-        )
-
-        memory["bias"]["current"] = None
-        memory["bias"]["based_on"] = None
-        memory["bias"]["confidence"] = None
-        memory["bias"]["invalidated_if"] = None
-
-        save_memory(memory)
-        return "Bias invalidated and cleared."
-
-    # REVIEW CURRENT BIAS
-    if text.startswith("review bias"):
-        return f"Current bias: {memory['bias']}"
-
-    # CLEAR BIAS
-    if text.startswith("clear bias"):
-        memory["bias"] = {
-            "current": None,
-            "based_on": None,
-            "confidence": None,
-            "invalidated_if": None,
-            "last_invalidated_reason": None,
-        }
-        save_memory(memory)
-        return "Bias cleared."
-
-    return None
-
-
-def main():
-    memory = load_memory()
-
-    print("=== Local Trading Assistant (Phase 1) Started ===")
-    print("Type 'exit' to quit.\n")
-
-    while True:
-        user_input = input("You: ").strip()
-
-        if user_input.lower() in ("exit", "quit"):
-            print("Goodbye 👋")
-            break
-
-        response = handle_bias_command(user_input, memory)
-        if response:
-            print(f"AI: {response}")
-        else:
-            print("AI: Command not recognized.")
-
-
-if __name__ == "__main__":
-    main()
+# OS
+.DS_Store
+Thumbs.db
