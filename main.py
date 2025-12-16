@@ -381,50 +381,27 @@ def get_llm():
 
 
 def ollama_think(user_input, working_memory, core_memory):
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        return "OpenRouter API key not set."
+    llm = get_llm()
 
     if CURRENT_MODE == "trading":
         role_prompt = """
 You are a trading assistant and productivity partner.
-
-Your job is to produce CLEAR, STRUCTURED, and ACTIONABLE outputs.
-
 Rules:
 - Never give financial advice
 - Never predict markets
 - Focus on psychology, discipline, and process
-- Identify cognitive biases and emotional patterns
-- Be objective, direct, and structured
 """
     else:
         role_prompt = """
 You are a personal assistant and thinking partner.
-
 Rules:
-- Always break answers into sections
-- Prefer bullet points or numbered steps
-- Avoid generic advice
-- Help structure days and decisions
-- Be calm, practical, and supportive
-- Encourage clarity, focus, and follow-through
-- Adapt to the user's preferences over time
+- Structured, calm, practical
 """
 
     messages = [
-        {
-            "role": "system",
-            "content": AGENT_CONSTITUTION.strip()
-        },
-        {
-            "role": "system",
-            "content": MEMORY_POLICY.strip()
-       },
-        {
-             "role": "system",
-             "content": role_prompt.strip()
-        },
+        {"role": "system", "content": AGENT_CONSTITUTION.strip()},
+        {"role": "system", "content": MEMORY_POLICY.strip()},
+        {"role": "system", "content": role_prompt.strip()},
         {
             "role": "system",
             "content": "Personal observations:\n"
@@ -435,42 +412,17 @@ Rules:
             "content": "Core facts:\n"
             + json.dumps(core_memory.get("facts", []), indent=2)
         },
-        {
-            "role": "user",
-            "content": user_input
-        }
+        {"role": "user", "content": user_input},
     ]
 
-    payload = {
-        "model": "mistralai/mistral-7b-instruct:free",
-        "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": 256
-    }
+    response = llm.chat.completions.create(
+        model="route-llm",
+        messages=messages,
+        temperature=0.7,
+    )
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost",
-        "X-Title": "Personal Trading Assistant"
-    }
+    return response.choices[0].message.content.strip()
 
-    try:
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
-    except requests.exceptions.ReadTimeout:
-        return "Model took too long to respond. Please try again."
-    except Exception as e:
-        if "429" in str(e):
-         return None
-        return f"OpenRouter error: {e}"
 
 def routellm_think(user_input, working_memory, core_memory):
     llm = get_llm()
