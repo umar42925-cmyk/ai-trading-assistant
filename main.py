@@ -1,24 +1,15 @@
-def load_json(path, default):
-    """
-    Safely load a JSON file.
-    If missing or corrupted, return default.
-    """
-    if not os.path.exists(path):
-        return default
-
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        return default
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-
 CURRENT_MODE = "personal"  # personal | trading
 UI_STATUS = "Online"  # Online | Rate-limited | Offline
+
+
+
+import json
+import os
+import streamlit as st
+from datetime import datetime
+import requests
+
+os.makedirs("memory", exist_ok=True)
 
 working_memory = load_json(
         "memory/working_memory.json",
@@ -31,7 +22,7 @@ core_memory = load_json(
     )
 
 bias_memory = load_json(
-        "Memory/bias.json",
+        "memory/bias.json",
         {
             "current": None,
             "based_on": None,
@@ -44,14 +35,6 @@ bias_memory = load_json(
 
 from symbol_resolver import resolve_symbol
 from market_data_fyers import FyersMarketData
-import os
-
-import json
-import os
-from datetime import datetime
-
-import requests
-import json
 
 from rich.console import Console
 from rich.panel import Panel
@@ -65,7 +48,8 @@ console = Console()
 # Initialize market data at module level
 market_data = None
 APP_ID = "0K4RH3LJYJ-100"
-FYERS_TOKEN = os.getenv("'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsiZDoxIiwiZDoyIiwieDowIiwieDoxIiwieDoyIl0sImF0X2hhc2giOiJnQUFBQUFCcFBfQ3lUMTFFM1REZGV3R3hBZWxnX3hzN2hLcGJaMHBwQ3VYeUd4TWs0T1VBMnJERlVWVnQ3WFlTT3Y1a2pGMUVUZWFaSVFfU1dpdUttSXdrZWV5VFAzN0J1M0VubE11aTlIRjluYWFfc2FnemhZbz0iLCJkaXNwbGF5X25hbWUiOiIiLCJvbXMiOiJLMSIsImhzbV9rZXkiOiI3N2RlNmM2YzRjZTc2ZWZiYzNlY2ZhNmQ1ODc3N2Q0ZDU0YTkzMmJjMmU2NDgxOGUxOWRhYzIxMyIsImlzRGRwaUVuYWJsZWQiOiJOIiwiaXNNdGZFbmFibGVkIjoiTiIsImZ5X2lkIjoiWFUwMTE5NCIsImFwcFR5cGUiOjEwMCwiZXhwIjoxNzY1ODQ1MDAwLCJpYXQiOjE3NjU3OTgwNjYsImlzcyI6ImFwaS5meWVycy5pbiIsIm5iZiI6MTc2NTc5ODA2Niwic3ViIjoiYWNjZXNzX3Rva2VuIn0.VXbebOBb412fIUn_xCwTX33V7wbSmLyrlMAAC1Q4Yis'")
+FYERS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
+
 
 if FYERS_TOKEN:
     market_data = FyersMarketData(APP_ID, FYERS_TOKEN)
@@ -483,7 +467,24 @@ def auto_journal_trading(user_input, model_response):
     journal["entries"].append(entry)
     save_json(journal_path, journal)
 
+def load_json(path, default):
+    """
+    Safely load a JSON file.
+    If missing or corrupted, return default.
+    """
+    if not os.path.exists(path):
+        return default
+
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return default
 MEMORY_FILE = "memory.json"
+
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
@@ -1052,7 +1053,7 @@ def main():
     # load persistent memory used by bias commands
 
     APP_ID = "0K4RH3LJYJ-100"
-    FYERS_TOKEN = os.getenv("'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsiZDoxIiwiZDoyIiwieDowIiwieDoxIiwieDoyIl0sImF0X2hhc2giOiJnQUFBQUFCcFBfQ3lUMTFFM1RIZGV3R3hBZWxnX3hzN2hLcGJaMHBwQ3VYeUd4TWs0T1VBMnJERlVWVnQ3WFlTT3Y1a2pGMUVUZWFaSVFfU1dpdUttSXdrZWV5VFAzN0J1M0VubE11aTlIRjluYWFfc2FnemhZbz0iLCJkaXNwbGF5X25hbWUiOiIiLCJvbXMiOiJLMSIsImhzbV9rZXkiOiI3N2RlNmM2YzRjZTc2ZWZiYzNlY2ZhNmQ1ODc3N2Q0ZDU0YTkzMmJjMmU2NDgxOGUxOWRhYzIxMyIsImlzRGRwaUVuYWJsZWQiOiJOIiwiaXNNdGZFbmFibGVkIjoiTiIsImZ5X2lkIjoiWFUwMTE5NCIsImFwcFR5cGUiOjEwMCwiZXhwIjoxNzY1ODQ1MDAwLCJpYXQiOjE3NjU3OTgwNjYsImlzcyI6ImFwaS5meWVycy5pbiIsIm5iZiI6MTc2NTc5ODA2Niwic3ViIjoiYWNjZXNzX3Rva2VuIn0.VXbebOBb412fIUn_xCwTX33V7wbSmLyrlMAAC1Q4Yis'")
+    FYERS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
 
     market_data = None
     if FYERS_TOKEN:
