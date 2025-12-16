@@ -364,7 +364,7 @@ def get_llm():
     if _llm is None:
         _llm = OpenAI(
             api_key=os.getenv("ABACUS_API_KEY"),
-            base_url="https://abacus.ai/app/route-llm-apis"
+            base_url="https://abacus.ai/app/route-llm-apis/v1"
         )
     return _llm
 
