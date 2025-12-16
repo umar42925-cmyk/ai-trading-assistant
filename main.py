@@ -354,8 +354,6 @@ Memory should remain minimal, factual, and reversible.
 
 """
 
-from openai import OpenAI
-
 _llm = None
 
 def get_llm():
@@ -363,36 +361,19 @@ def get_llm():
     if _llm is not None:
         return _llm
 
-    # Try RouteLLM
-    try:
-        from routellm import RouteLLM
-        from openai import OpenAI
+    from routellm import RouteLLM
 
-        class RouteWrapper:
-            def __init__(self):
-                self.client = RouteLLM(
-                    api_key=os.getenv("ROUTELLM_API_KEY"),
-                    providers={"openai": OpenAI()},
-                    strategy="quality"
-                )
+    _llm = RouteLLM(
+        api_key=os.getenv("ROUTELLM_API_KEY"),
+        providers={
+            "openrouter": {
+                "api_key": os.getenv("ROUTELLM_API_KEY")
+            }
+        },
+        strategy="quality"
+    )
 
-            def create(self, **kwargs):
-                return self.client.chat.completions.create(**kwargs)
-
-        _llm = RouteWrapper()
-        return _llm
-
-    except Exception:
-        from openai import OpenAI
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-        class OpenAIWrapper:
-            def create(self, **kwargs):
-                return client.chat.completions.create(**kwargs)
-
-        _llm = OpenAIWrapper()
-        return _llm
-
+    return _llm
 
 
 
@@ -430,11 +411,12 @@ Rules:
         {"role": "user", "content": user_input},
     ]
 
-    response = llm.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.6,
-    )
+    response = llm.chat.completions.create(
+         model="route-llm",
+         messages=messages,
+         temperature=0.6,
+         )
+
     return response.choices[0].message.content.strip()
 
 
