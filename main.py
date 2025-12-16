@@ -56,19 +56,9 @@ bias_memory = load_json(
 from symbol_resolver import resolve_symbol
 from market_data_fyers import FyersMarketData
 
-IS_STREAMLIT = bool(os.getenv("STREAMLIT_SERVER_RUNNING"))
+console = None
 
-if not IS_STREAMLIT:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.markdown import Markdown
-    from rich.rule import Rule
-    from rich.text import Text
-    from rich.align import Align
 
-    console = Console()
-else:
-    console = None
 
 # Initialize market data at module level
 market_data = None
@@ -1239,6 +1229,5 @@ def auto_learn(user_input, working_memory):
 
     with open("memory/working_memory.json", "w") as f:
         json.dump(working_memory, f, indent=2)
-
-if __name__ == "__main__":
+if __name__ == "__main__" and not os.getenv("STREAMLIT_SERVER_RUNNING"):
     main()
