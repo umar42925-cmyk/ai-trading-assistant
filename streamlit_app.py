@@ -1,5 +1,5 @@
 import streamlit as st
-from main import process_user_input, get_openrouter_api_key
+from main import process_user_input, get_RouteLLM_api_key
 
 # --------------------------------------------------
 # Page config (must be first Streamlit call)
