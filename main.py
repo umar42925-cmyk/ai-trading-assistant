@@ -362,6 +362,14 @@ _llm = None
 def get_llm():
     global _llm
     if _llm is None:
+        try:
+            from routellm import RouteLLM
+            from openai import OpenAI
+        except Exception as e:
+            raise RuntimeError(
+                "RouteLLM is not available in this environment"
+            ) from e
+
         _llm = RouteLLM(
             api_key=os.getenv("ROUTELLM_API_KEY"),
             providers={

@@ -1,5 +1,5 @@
 import streamlit as st
-from main import process_user_input, get_RouteLLM_api_key
+from main import process_user_input
 
 # --------------------------------------------------
 # Page config (must be first Streamlit call)
@@ -25,7 +25,7 @@ if "mode" not in st.session_state:
 # Sidebar
 # --------------------------------------------------
 st.sidebar.title("⚙️ Control Panel")
-st.sidebar.markdown("**Brain:** OpenRouter")
+st.sidebar.markdown("**Brain:** RouteLLM")
 st.sidebar.markdown(f"**Mode:** {st.session_state.mode}")
 st.sidebar.markdown(f"**Status:** {st.session_state.status}")
 st.sidebar.markdown("**Memory:** ON")
@@ -35,11 +35,6 @@ if st.sidebar.button("🧹 Clear chat"):
     st.session_state.status = "Online"
     st.session_state.mode = "personal"
     st.rerun()
-
-if get_openrouter_api_key():
-    st.sidebar.success("OpenRouter: Connected")
-else:
-    st.sidebar.error("OpenRouter: Missing API key")
 
 # --------------------------------------------------
 # Main UI
