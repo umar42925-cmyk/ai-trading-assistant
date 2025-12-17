@@ -395,6 +395,9 @@ Rules:
 
 def call_routellm(messages, temperature=0.6):
     api_key = os.getenv("ROUTELLM_API_KEY")
+
+    assert api_key and len(api_key) > 20, "Invalid Abacus API key"
+
     if not api_key:
         raise RuntimeError("ROUTELLM_API_KEY not set")
 
