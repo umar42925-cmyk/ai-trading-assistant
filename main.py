@@ -405,7 +405,7 @@ def call_routellm(messages, temperature=0.6):
     }
 
     payload = {
-        "model": "gpt-5",
+        "model": "route-llm",
         "messages": messages,
         "temperature": temperature,
     }
