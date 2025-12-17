@@ -1,18 +1,17 @@
 import streamlit as st
 from main import process_user_input
 
-
-# ----
-# Page config (must be first Streamlit call)
-# ----
+# --------------------------------------------------
+# Page config (MUST be first Streamlit call)
+# --------------------------------------------------
 st.set_page_config(
     page_title="AI Trading Assistant",
     layout="wide"
 )
 
-# ----
+# --------------------------------------------------
 # Session state initialization
-# ----
+# --------------------------------------------------
 if "chat" not in st.session_state:
     st.session_state.chat = []
 
@@ -22,18 +21,10 @@ if "status" not in st.session_state:
 if "mode" not in st.session_state:
     st.session_state.mode = "personal"
 
-# ----
-# Sidebar
-# ----
-
-# Market Data Source (last-moment safe binding)
-if "market_source" not in st.session_state:
-    st.session_state.market_source = "broker"
-
-source = st.session_state.market_source
-
+# --------------------------------------------------
+# Sidebar (CLEAN, STATIC, SAFE)
+# --------------------------------------------------
 st.sidebar.title("⚙️ Control Panel")
-st.sidebar.markdown(f"📡 Market Data Source: {str(source).title()}")
 st.sidebar.markdown("**Brain:** RouteLLM")
 st.sidebar.markdown(f"**Mode:** {st.session_state.mode}")
 st.sidebar.markdown(f"**Status:** {st.session_state.status}")
@@ -45,49 +36,45 @@ if st.sidebar.button("🧹 Clear chat"):
     st.session_state.mode = "personal"
     st.rerun()
 
-# ----
+# --------------------------------------------------
 # Main UI
-# ----
+# --------------------------------------------------
 st.title("📈 AI Trading Assistant")
 
-# ----
+# --------------------------------------------------
 # Input form
-# ----
+# --------------------------------------------------
 with st.form("chat_form", clear_on_submit=True):
     user_input = st.text_input("Type a message")
     submitted = st.form_submit_button("Send")
 
-# ----
-# Handle submission (THIS is the only place logic runs)
-# ----
+# --------------------------------------------------
+# Handle submission (ONLY logic entry point)
+# --------------------------------------------------
 if submitted and user_input:
-    # Call core logic
     result = process_user_input(user_input)
 
     ai_text = result.get("response")
-    status = result.get("status", "Unknown")
+    status = result.get("status", "Online")
     mode = result.get("mode", st.session_state.mode)
 
-    # Update sidebar state
     st.session_state.status = status
     st.session_state.mode = mode
 
-    # Save chat
     st.session_state.chat.append(("You", user_input))
 
     if ai_text:
         st.session_state.chat.append(("AI", ai_text))
     else:
         st.session_state.chat.append(
-            ("AI", f"⚠️ System status: {status}. Please try again shortly.")
+            ("AI", "⚠️ No response received. Please try again.")
         )
 
-    # Correct rerun (NOT experimental)
     st.rerun()
 
-# ----
+# --------------------------------------------------
 # Render chat
-# ----
+# --------------------------------------------------
 st.markdown("---")
 
 for speaker, text in st.session_state.chat:
@@ -97,7 +84,3 @@ for speaker, text in st.session_state.chat:
     else:
         st.markdown("**🤖 AI**")
         st.markdown(text)
-if source == "twelve_data":
-    st.warning(
-        "Broker data unavailable. Using global market data (Twelve Data) as fallback."
-    )
