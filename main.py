@@ -393,35 +393,38 @@ Rules:
 
 
 
-def call_routellm(messages, temperature=0.6):
-    api_key = os.getenv("ROUTELLM_API_KEY")
+dfrom openai import OpenAI
+import os
 
-    assert api_key and len(api_key) > 20, "Invalid Abacus API key"
+client = OpenAI(
+    api_key=os.environ["ROUTELLM_API_KEY"],   # Abacus key
+    base_url="https://routellm.abacus.ai/v1"  # ⬅️ BASE ONLY
+)
 
-    if not api_key:
-        raise RuntimeError("ROUTELLM_API_KEY not set")
+def routellm_think(user_input, working_memory, core_memory):
+    messages = [
+        {"role": "system", "content": AGENT_CONSTITUTION.strip()},
+        {"role": "system", "content": MEMORY_POLICY.strip()},
+        {
+            "role": "system",
+            "content": "Personal observations:\n"
+            + json.dumps(working_memory.get("observations", []), indent=2)
+        },
+        {
+            "role": "system",
+            "content": "Core facts:\n"
+            + json.dumps(core_memory.get("facts", []), indent=2)
+        },
+        {"role": "user", "content": user_input},
+    ]
 
-    url = "https://api.abacus.ai/api/v0/routeLLMInference"
+    resp = client.chat.completions.create(
+        model="route-llm",
+        messages=messages,
+        temperature=0.6,
+    )
 
-    headers = {
-        "apiKey": api_key,
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "messages": messages,
-        "temperature": temperature,
-    }
-
-    r = requests.post(url, headers=headers, json=payload, timeout=60)
-    r.raise_for_status()
-
-    data = r.json()
-
-    # RouteLLM returns output differently than OpenAI
-    return data["response"]
-
-
+    return resp.choices[0].message.content
 
 
 def auto_journal_trading(user_input, model_response):
