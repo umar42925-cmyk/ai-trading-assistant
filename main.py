@@ -2,8 +2,7 @@ CURRENT_MODE = "personal"  # personal | trading
 UI_STATUS = "Online"  # Online | Rate-limited | Offline
 
 import json
-import os
-import streamlit as st
+import requests
 import os
 import streamlit as st
 from dotenv import load_dotenv
@@ -363,8 +362,8 @@ def get_llm():
     global _llm
     if _llm is None:
         _llm = OpenAI(
-            api_key=os.getenv("ABACUS_API_KEY"),
-            base_url="https://api.abacus.ai/v1"
+            api_key=os.getenv("ROUTELLM_API_KEY"),
+            base_url="https://route-llm.abacus.ai/v1"
         )
     return _llm
 
@@ -404,11 +403,12 @@ Rules:
         },
         {"role": "user", "content": user_input},
     ]
-    response = client.chat.completions.create(
-        model="routellm-default",   # MUST match what Abacus UI shows
-        messages=messages,
-        temperature=0.6,
+    response = llm.chat.completions.create(
+       model="route-llm",
+       messages=messages,
+       temperature=0.6,
     )
+
 
     return response.choices[0].message.content
 
