@@ -2,16 +2,6 @@ import streamlit as st
 from main import process_user_input
 
 
-st.set_page_config(
-    page_title="AI Trading Assistant",
-    layout="wide"
-)
-
-# --------------------------------------------------
-# Session state initialization
-# --------------------------------------------------
-
-
 # --------------------------------------------------
 # Page config (must be first Streamlit call)
 # --------------------------------------------------
