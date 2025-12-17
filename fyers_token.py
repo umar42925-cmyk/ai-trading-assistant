@@ -1,22 +1,30 @@
-from fyers_apiv3 import fyersModel
+import os
+import hashlib
+import requests
 
-# ===== EDIT THESE FOUR LINES ONLY =====
-APP_ID = "0K4RH3LJYJ-100"          # same as Step 3
-SECRET_KEY = "L7CY5MBUL9"  # from FYERS dashboard
-REDIRECT_URI = "http://127.0.0.1:5000/redirect"
-AUTH_CODE = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhcHBfaWQiOiIwSzRSSDNMSllKIiwidXVpZCI6ImE1NTZhYzM0ODk2ZjQ1YjRiM2IwNzE3ODYyMTg2YmQ5IiwiaXBBZGRyIjoiIiwibm9uY2UiOiIiLCJzY29wZSI6IiIsImRpc3BsYXlfbmFtZSI6IlhVMDExOTQiLCJvbXMiOiJLMSIsImhzbV9rZXkiOiI3N2RlNmM2YzRjZTc2ZWZiYzNlY2ZhNmQ1ODc3N2Q0ZDU0YTkzMmJjMmU2NDgxOGUxOWRhYzIxMyIsImlzRGRwaUVuYWJsZWQiOiJOIiwiaXNNdGZFbmFibGVkIjoiTiIsImF1ZCI6IltcImQ6MVwiLFwiZDoyXCIsXCJ4OjBcIixcIng6MVwiLFwieDoyXCJdIiwiZXhwIjoxNzY1ODI3OTkzLCJpYXQiOjE3NjU3OTc5OTMsImlzcyI6ImFwaS5sb2dpbi5meWVycy5pbiIsIm5iZiI6MTc2NTc5Nzk5Mywic3ViIjoiYXV0aF9jb2RlIn0.l56zXSJQjx1FQSP0diacnjJhcb5o5F_jj01hwmaWV3M"
-# ====================================
+CLIENT_ID_FULL = os.getenv("FYERS_CLIENT_ID")   # XXXXXXXX-100
+SECRET_KEY = os.getenv("FYERS_SECRET_KEY")
 
-session = fyersModel.SessionModel(
-    client_id=APP_ID,
-    secret_key=SECRET_KEY,
-    redirect_uri=REDIRECT_URI,
-    response_type="code",
-    grant_type="authorization_code"
+auth_code = input("Paste auth_code: ").strip()
+
+CLIENT_ID_BASE = CLIENT_ID_FULL.split("-")[0]
+
+app_id_hash = hashlib.sha256(
+    f"{CLIENT_ID_BASE}:{SECRET_KEY}".encode()
+).hexdigest()
+
+payload = {
+    "grant_type": "authorization_code",
+    "appIdHash": app_id_hash,
+    "code": auth_code
+}
+
+r = requests.post(
+    "https://api-t1.fyers.in/api/v3/token",
+    json=payload,
+    headers={"Content-Type": "application/json"},
+    timeout=10
 )
 
-session.set_token(AUTH_CODE)
-response = session.generate_token()
-
-print("\n=== FYERS TOKEN RESPONSE ===")
-print(response)
+print("STATUS:", r.status_code)
+print("RESPONSE:", r.text)

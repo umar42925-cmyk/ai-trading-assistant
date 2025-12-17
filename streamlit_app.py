@@ -1,6 +1,23 @@
 import streamlit as st
 from main import process_user_input
 
+# -----------------------------
+# Market Data Source (safe init)
+# -----------------------------
+source = st.session_state.get("market_source", "unknown")
+
+
+# -----------------------------
+# Market Data Source Resolution
+# -----------------------------
+
+if "market_source" not in st.session_state:
+    # default logic (safe)
+    st.session_state.market_source = "broker"  # or "global"
+
+source = st.session_state.market_source
+
+
 # --------------------------------------------------
 # Page config (must be first Streamlit call)
 # --------------------------------------------------
