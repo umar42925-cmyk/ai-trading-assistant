@@ -353,25 +353,10 @@ Memory should remain minimal, factual, and reversible.
 
 """
 
-import os
-from openai import OpenAI
-
-_llm = None
-
-def get_llm():
-    global _llm
-    if _llm is None:
-        _llm = OpenAI(
-            api_key=os.getenv("ROUTELLM_API_KEY"),
-            base_url="https://routellm.abacus.ai/v1"
-        )
-    return _llm
 
 
 
 def routellm_think(user_input, working_memory, core_memory):
-    llm = get_llm()
-    
     if CURRENT_MODE == "trading":
         role_prompt = """
 You are a trading assistant and productivity partner.
@@ -402,13 +387,8 @@ Rules:
         },
         {"role": "user", "content": user_input},
     ]
-    response = llm.chat.completions.create(
-       model="route-llm",
-       messages=messages,
-       temperature=0.6,
-    )
 
-
+    # ✅ SINGLE, CORRECT CALL
     return call_routellm(messages, temperature=0.6)
 
 
