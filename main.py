@@ -353,6 +353,12 @@ Memory should remain minimal, factual, and reversible.
 
 """
 
+# ================================
+# ROUTELLM SINGLE SOURCE OF TRUTH
+# Do NOT add any other LLM calls.
+# Do NOT use requests / api.abacus.ai here.
+# OpenAI-compatible RouteLLM ONLY.
+# ================================
 
 
 from openai import OpenAI
@@ -370,7 +376,7 @@ def routellm_think(user_input, working_memory, core_memory):
         {
             "role": "system",
             "content": "Personal observations:\n"
-            + json.dumps(working_memory.get("observations", []), indent=2)
+            + json.dumps(working_memory.get("observations") or [], indent=2)
         },
         {
             "role": "system",
@@ -930,10 +936,9 @@ def process_user_input(user_input: str) -> dict:
             }
 
         if not market_data:
-            UI_STATUS = "Offline"
-            return {
-                "response": None,
-                "status": UI_STATUS,
+          return {
+                "response": "Live market data isn’t available right now.",
+                "status": UI_STATUS,  # keep Online
                 "mode": CURRENT_MODE
             }
 
@@ -971,6 +976,11 @@ def process_user_input(user_input: str) -> dict:
         import traceback
         traceback.print_exc()
         ai_response = "LLM crashed – check logs"
+        
+        # --- Final safety guard: never return empty AI output ---
+    if not ai_response or not ai_response.strip():
+        ai_response = "I’m here. What would you like to work on?"
+
 
 
     return {
