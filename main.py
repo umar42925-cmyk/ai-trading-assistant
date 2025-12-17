@@ -393,36 +393,6 @@ def routellm_think(user_input, working_memory, core_memory):
         traceback.print_exc()
         raise
 
-def call_routellm(messages, temperature=0.6):
-    api_key = os.getenv("ROUTELLM_API_KEY")
-
-    # 🔍 TEMPORARY SANITY CHECK (ADD THIS LINE)
-    assert api_key and len(api_key) > 20, "Invalid Abacus API key"
-
-    url = "https://api.abacus.ai/api/v0/routeLLMInference"
-
-    headers = {
-        "apiKey": api_key,
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "messages": messages,
-        "temperature": temperature,
-    }
-
-    r = requests.post(url, headers=headers, json=payload, timeout=60)
-
-   # 🔍 DEBUG — DO NOT SKIP
-    print("URL:", r.url)
-    print("STATUS:", r.status_code)
-    print("BODY:", r.text)
-
-    r.raise_for_status()
-
-    data = r.json()
-    return data["response"]
-
 
 
 def auto_journal_trading(user_input, model_response):
