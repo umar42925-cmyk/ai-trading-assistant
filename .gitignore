@@ -16,3 +16,8 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime memory (NEVER commit)
+memory/*.json
+memory/**/*
+!memory/.gitkeep
