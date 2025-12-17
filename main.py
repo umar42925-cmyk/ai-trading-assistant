@@ -355,6 +355,14 @@ Memory should remain minimal, factual, and reversible.
 
 
 
+from openai import OpenAI
+import os
+
+client = OpenAI(
+    api_key=os.environ["ROUTELLM_API_KEY"],   # Abacus key
+    base_url="https://routellm.abacus.ai/v1"  # ⬅️ BASE ONLY
+)
+
 def routellm_think(user_input, working_memory, core_memory):
     messages = [
         {"role": "system", "content": AGENT_CONSTITUTION.strip()},
@@ -379,6 +387,7 @@ def routellm_think(user_input, working_memory, core_memory):
     )
 
     return resp.choices[0].message.content
+
 
 def call_routellm(messages, temperature=0.6):
     api_key = os.getenv("ROUTELLM_API_KEY")
