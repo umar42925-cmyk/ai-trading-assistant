@@ -1,18 +1,12 @@
 # data_providers/broker_data.py
 
-from fyers_api import fyersModel
-from health import mark_broker_success
-
 def broker_fetch(symbol, interval):
-    """
-    Single broker data entry point.
-    Returns raw broker data or raises exception.
-    """
+    try:
+        from fyers_api import fyersModel  # ✅ moved INSIDE function
+    except ImportError as e:
+        raise RuntimeError("Fyers API not available") from e
 
-    # ⚠️ TEMPORARY: call whatever Fyers function you already use
-    data = get_fyers_data(symbol, interval)
-
-    # ✅ ONLY mark success if no exception occurred
-    mark_broker_success()
-
-    return data
+    # ---- existing broker logic below ----
+    # fyers = fyersModel.FyersModel(...)
+    # data = fyers.history(...)
+    # return data

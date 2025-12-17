@@ -6,13 +6,12 @@ def get_market_data(symbol, interval):
     if broker_healthy():
         try:
             data = broker_fetch(symbol, interval)
-            print(f"[DATA ROUTER] source={source}")
-
+            print("[DATA ROUTER] source=broker")
             return data, "broker"
+
         except Exception:
             pass
 
     data = fetch_twelve_data(symbol, interval)
-    print(f"[DATA ROUTER] source={source}")
-
+    print("[DATA ROUTER] source=twelve_data")
     return data, "twelve_data"
