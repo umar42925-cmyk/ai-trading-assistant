@@ -11,14 +11,6 @@ st.set_page_config(
 # Session state initialization
 # --------------------------------------------------
 
-# --------------------------------------------------
-# Market Data Source (single owner)
-# --------------------------------------------------
-if "market_source" not in st.session_state:
-    st.session_state.market_source = "broker"  # default
-
-source = st.session_state.market_source
-
 
 # --------------------------------------------------
 # Page config (must be first Streamlit call)
@@ -43,11 +35,18 @@ if "mode" not in st.session_state:
 # --------------------------------------------------
 # Sidebar
 # --------------------------------------------------
+
+# Market Data Source (last-moment safe binding)
+if "market_source" not in st.session_state:
+    st.session_state.market_source = "broker"
+
+source = st.session_state.market_source
+
 st.sidebar.title("⚙️ Control Panel")
+st.sidebar.markdown(f"📡 Market Data Source: {source.title()}")
 st.sidebar.markdown("**Brain:** RouteLLM")
 st.sidebar.markdown(f"**Mode:** {st.session_state.mode}")
 st.sidebar.markdown(f"**Status:** {st.session_state.status}")
-st.sidebar.markdown(f"📡 Market Data Source: {source.title()}")
 st.sidebar.markdown("**Memory:** ON")
 
 if st.sidebar.button("🧹 Clear chat"):
