@@ -1,19 +1,21 @@
 import streamlit as st
 from main import process_user_input
 
-# -----------------------------
-# Market Data Source (safe init)
-# -----------------------------
-source = st.session_state.get("market_source", "unknown")
 
+st.set_page_config(
+    page_title="AI Trading Assistant",
+    layout="wide"
+)
 
-# -----------------------------
-# Market Data Source Resolution
-# -----------------------------
+# --------------------------------------------------
+# Session state initialization
+# --------------------------------------------------
 
+# --------------------------------------------------
+# Market Data Source (single owner)
+# --------------------------------------------------
 if "market_source" not in st.session_state:
-    # default logic (safe)
-    st.session_state.market_source = "broker"  # or "global"
+    st.session_state.market_source = "broker"  # default
 
 source = st.session_state.market_source
 
