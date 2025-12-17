@@ -398,22 +398,26 @@ def call_routellm(messages, temperature=0.6):
     if not api_key:
         raise RuntimeError("ROUTELLM_API_KEY not set")
 
-    url = "https://routellm.abacus.ai/v1/chat/completions"
+    url = "https://api.abacus.ai/api/v0/routeLLMInference"
+
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "apiKey": api_key,
         "Content-Type": "application/json",
     }
 
     payload = {
-        "model": "route-llm",
         "messages": messages,
         "temperature": temperature,
     }
 
-    r = requests.post(url, headers=headers, json=payload, timeout=30)
+    r = requests.post(url, headers=headers, json=payload, timeout=60)
     r.raise_for_status()
 
-    return r.json()["choices"][0]["message"]["content"]
+    data = r.json()
+
+    # RouteLLM returns output differently than OpenAI
+    return data["response"]
+
 
 
 
