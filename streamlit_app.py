@@ -97,7 +97,10 @@ for speaker, text in st.session_state.chat:
     else:
         st.markdown("**🤖 AI**")
         st.markdown(text)
-if source == "twelve_data":
+
+# Safely derive source again to avoid NameError
+market_source = st.session_state.get("market_source", "broker")
+if market_source == "twelve_data":
     st.warning(
         "Broker data unavailable. Using global market data (Twelve Data) as fallback."
     )
