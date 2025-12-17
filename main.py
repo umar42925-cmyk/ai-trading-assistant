@@ -363,7 +363,7 @@ def get_llm():
     if _llm is None:
         _llm = OpenAI(
             api_key=os.getenv("ROUTELLM_API_KEY"),
-            base_url="https://routellm.abacus.ai/v1/chat/completions"
+            base_url="https://routellm.abacus.ai/v1"
         )
     return _llm
 
@@ -413,7 +413,7 @@ Rules:
 
 
 
-def call_routellm(messages, temperature=0.6, stream=False):
+def call_routellm(messages, temperature=0.6):
     api_key = os.getenv("ROUTELLM_API_KEY")
     if not api_key:
         raise RuntimeError("ROUTELLM_API_KEY not set")
@@ -421,30 +421,20 @@ def call_routellm(messages, temperature=0.6, stream=False):
     url = "https://routellm.abacus.ai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     payload = {
         "model": "gpt-5",
         "messages": messages,
         "temperature": temperature,
-        "stream": stream
     }
 
-    response = requests.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=30
-    )
+    r = requests.post(url, headers=headers, json=payload, timeout=30)
+    r.raise_for_status()
 
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"RouteLLM error {response.status_code}: {response.text}"
-        )
+    return r.json()["choices"][0]["message"]["content"]
 
-    data = response.json()
-    return data["choices"][0]["message"]["content"]
 
 
 def auto_journal_trading(user_input, model_response):
