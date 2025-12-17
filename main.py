@@ -379,15 +379,19 @@ def routellm_think(user_input, working_memory, core_memory):
         },
         {"role": "user", "content": user_input},
     ]
-
-    resp = client.chat.completions.create(
+    try:
+        resp = client.chat.completions.create(
         model="route-llm",
         messages=messages,
         temperature=0.6,
     )
+        return resp.choices[0].message.content
 
-    return resp.choices[0].message.content
-
+    except Exception as e:
+        import traceback
+        print("🔥 REAL LLM ERROR:")
+        traceback.print_exc()
+        raise
 
 def call_routellm(messages, temperature=0.6):
     api_key = os.getenv("ROUTELLM_API_KEY")
@@ -408,10 +412,17 @@ def call_routellm(messages, temperature=0.6):
     }
 
     r = requests.post(url, headers=headers, json=payload, timeout=60)
+
+   # 🔍 DEBUG — DO NOT SKIP
+    print("URL:", r.url)
+    print("STATUS:", r.status_code)
+    print("BODY:", r.text)
+
     r.raise_for_status()
 
     data = r.json()
     return data["response"]
+
 
 
 def auto_journal_trading(user_input, model_response):
