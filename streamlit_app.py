@@ -28,6 +28,7 @@ st.sidebar.title("⚙️ Control Panel")
 st.sidebar.markdown("**Brain:** RouteLLM")
 st.sidebar.markdown(f"**Mode:** {st.session_state.mode}")
 st.sidebar.markdown(f"**Status:** {st.session_state.status}")
+st.sidebar.markdown(f"📡 Market Data Source: {source.title()}")
 st.sidebar.markdown("**Memory:** ON")
 
 if st.sidebar.button("🧹 Clear chat"):
@@ -88,3 +89,7 @@ for speaker, text in st.session_state.chat:
     else:
         st.markdown("**🤖 AI**")
         st.markdown(text)
+if source == "twelve_data":
+    st.warning(
+        "Broker data unavailable. Using global market data (Twelve Data) as fallback."
+    )

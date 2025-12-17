@@ -360,6 +360,19 @@ Memory should remain minimal, factual, and reversible.
 # OpenAI-compatible RouteLLM ONLY.
 # ================================
 
+# ================================
+# CORE INVARIANT — LLM ARCHITECTURE
+#
+# Single-brain rule:
+# - RouteLLM via OpenAI-compatible client ONLY
+# - No requests.post to LLMs
+# - No api.abacus.ai inference calls
+# - No duplicate or fallback LLM calls
+#
+# If this section changes, it must be intentional.
+# ================================
+
+
 
 from openai import OpenAI
 import os
@@ -976,7 +989,7 @@ def process_user_input(user_input: str) -> dict:
         import traceback
         traceback.print_exc()
         ai_response = "LLM crashed – check logs"
-        
+
         # --- Final safety guard: never return empty AI output ---
     if not ai_response or not ai_response.strip():
         ai_response = "I’m here. What would you like to work on?"
