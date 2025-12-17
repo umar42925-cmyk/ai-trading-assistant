@@ -387,11 +387,9 @@ def routellm_think(user_input, working_memory, core_memory):
     )
         return resp.choices[0].message.content
 
-    except Exception as e:
-        import traceback
-        print("🔥 REAL LLM ERROR:")
-        traceback.print_exc()
-        raise
+    except Exception:
+       return "I’m having trouble reasoning right now. Please try again in a moment."
+
 
 
 
@@ -970,7 +968,10 @@ def process_user_input(user_input: str) -> dict:
         UI_STATUS = "Online" if ai_response else "Error"
     except Exception as e:
         UI_STATUS = "Error"
-        ai_response = f"⚠️ LLM error: {str(e)}"
+        import traceback
+        traceback.print_exc()
+        ai_response = "LLM crashed – check logs"
+
 
     return {
         "response": ai_response,
