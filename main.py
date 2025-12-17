@@ -363,11 +363,10 @@ def get_llm():
     if _llm is None:
         _llm = OpenAI(
             api_key=os.getenv("ROUTELLM_API_KEY"),
-            base_url="https://route-llm.abacus.ai/v1"
+            base_url="https://routellm.abacus.ai/v1/chat/completions"
         )
     return _llm
 
- 
 
 
 def routellm_think(user_input, working_memory, core_memory):
