@@ -21,3 +21,10 @@ Thumbs.db
 memory/*.json
 memory/**/*
 !memory/.gitkeep
+
+# FYERS auth & logs (DO NOT COMMIT)
+fyers_login.py
+fyers_token.py
+fyersapi.log
+fyersRequests.log
+

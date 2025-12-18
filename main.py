@@ -483,6 +483,14 @@ def handle_memory_command(user_input, core_memory):
             return f"I've saved this: {fact}"
 
     return None
+def check_fyers():
+    try:
+        from data.fyers_client import fyers_health_check
+        fyers_health_check()
+        return True
+    except Exception as e:
+        return False
+
 
 
 def show_preferences(working_memory):
