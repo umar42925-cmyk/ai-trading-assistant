@@ -56,7 +56,8 @@ bias_memory = load_json(
     )
 
 
-from router import get_market_data
+from data_router.router import get_market_data
+
 
 from symbol_resolver import resolve_symbol
 # ==============================
