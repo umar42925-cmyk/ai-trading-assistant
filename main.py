@@ -786,13 +786,24 @@ def is_casual_chat(text: str) -> bool:
 
 
 
+import re
+
 def requires_live_price(text: str) -> bool:
     t = text.lower()
+
     triggers = [
-        "price", "trading", "right now", "live", "current",
-        "where is", "ltp", "now", "quote", "value"
+        r"\bprice\b",
+        r"\bltp\b",
+        r"\bquote\b",
+        r"\bvalue\b",
+        r"\bright now\b",
+        r"\blive\b",
+        r"\bcurrent\b",
+        r"\bwhere is\b",
     ]
-    return any(k in t for k in triggers)
+
+    return any(re.search(p, t) for p in triggers)
+
 
 def render_header(console, mode, memory_on, brain, status):
     header_text = Text()
