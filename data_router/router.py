@@ -2,6 +2,19 @@ from health import broker_healthy
 from data_providers.broker_data import broker_fetch
 from data_providers.twelve_data import fetch_twelve_data
 
+def normalize_for_twelve_data(symbol: str) -> str:
+    """
+    Convert broker-style symbols to Twelve Data format.
+    """
+    if ":" in symbol:
+        symbol = symbol.split(":", 1)[1]
+
+    symbol = symbol.replace("-INDEX", "")
+    symbol = symbol.replace("-EQ", "")
+
+    return symbol
+
+
 def get_market_data(symbol, interval):
     if broker_healthy():
         try:
@@ -13,7 +26,9 @@ def get_market_data(symbol, interval):
             print(f"[DATA ROUTER] broker failed: {e}")
 
     try:
-        data = fetch_twelve_data(symbol, interval)
+        td_symbol = normalize_for_twelve_data(symbol)
+        data = fetch_twelve_data(td_symbol, interval)
+
         print("[DATA ROUTER] source=twelve_data")
         return data, "twelve_data", "ok"
 

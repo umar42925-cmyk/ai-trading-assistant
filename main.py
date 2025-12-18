@@ -73,7 +73,6 @@ FYERS_ACCESS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
 
 print("FYERS_CLIENT_ID:", bool(FYERS_CLIENT_ID))
 print("FYERS_ACCESS_TOKEN:", bool(FYERS_ACCESS_TOKEN))
-print("market_data initialized:", market_data is not None)
 
 
 
