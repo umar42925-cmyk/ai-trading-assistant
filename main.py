@@ -58,8 +58,8 @@ bias_memory = load_json(
 
 from data_router.router import get_market_data
 
+from symbol_intelligence import resolve_instrument
 
-from symbol_resolver import resolve_symbol
 # ==============================
 # GLOBAL MARKET DATA
 # ==============================
@@ -957,10 +957,14 @@ def process_user_input(user_input: str) -> dict:
     if requires_live_price(user_input):
         response = None
 
-        symbol = resolve_symbol(user_input)
-        if not symbol:
-           response = "I couldn’t identify the instrument."
+        from symbol_intelligence import resolve_instrument
+
+        instrument = resolve_instrument(user_input)
+
+        if not instrument:
+            response = "I couldn't identify the instrument."
         else:
+            symbol = instrument["symbol"]
             data, source, status = get_market_data(symbol, "1min")
 
             if status != "ok" or not data:
