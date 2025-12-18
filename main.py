@@ -62,15 +62,6 @@ console = None
 
 
 
-# Initialize market data at module level
-market_data = None
-APP_ID = "0K4RH3LJYJ-100"
-FYERS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
-
-
-if FYERS_TOKEN:
-    market_data = FyersMarketData(APP_ID, FYERS_TOKEN)
-
 
 AGENT_CONSTITUTION = """
 You are an AI Agent operating under the following Constitution.
@@ -1042,7 +1033,8 @@ def main():
 
     # load persistent memory used by bias commands
 
-    APP_ID = "0K4RH3LJYJ-100"
+    APP_ID = os.getenv("FYERS_CLIENT_ID")
+
     FYERS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
 
     market_data = None
