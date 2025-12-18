@@ -55,13 +55,13 @@ bias_memory = load_json(
         }
     )
 
-from symbol_resolver import resolve_symbol
-from market_data_fyers import FyersMarketData
 
+from router import get_market_data
+
+from symbol_resolver import resolve_symbol
 # ==============================
 # GLOBAL MARKET DATA
 # ==============================
-market_data = None
 
 
 console = None
@@ -69,14 +69,10 @@ console = None
 FYERS_CLIENT_ID = os.getenv("FYERS_CLIENT_ID")
 FYERS_ACCESS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
 
-if FYERS_CLIENT_ID and FYERS_ACCESS_TOKEN:
-    try:
-        market_data = FyersMarketData(
-            client_id=FYERS_CLIENT_ID,
-            access_token=FYERS_ACCESS_TOKEN
-        )
-    except Exception:
-        market_data = None
+
+print("FYERS_CLIENT_ID:", bool(FYERS_CLIENT_ID))
+print("FYERS_ACCESS_TOKEN:", bool(FYERS_ACCESS_TOKEN))
+print("market_data initialized:", market_data is not None)
 
 
 
@@ -959,39 +955,30 @@ def process_user_input(user_input: str) -> dict:
 
     # --- Live market data ---
     if requires_live_price(user_input):
+        response = None
+
         symbol = resolve_symbol(user_input)
         if not symbol:
-            return {
-                "response": "I couldn’t identify the instrument.",
-                "status": UI_STATUS,
-                "mode": CURRENT_MODE
-            }
+           response = "I couldn’t identify the instrument."
+        else:
+            data, source, status = get_market_data(symbol, "1min")
 
-        if not market_data:
-          return {
-                "response": "Live market data isn’t available right now.",
-                "status": UI_STATUS,  # keep Online
-                "mode": CURRENT_MODE
-            }
-
-        data = market_data.fetch_live_quote(symbol)
-        if not data or "error" in data:
-            UI_STATUS = "Offline"
-            return {
-                "response": None,
-                "status": UI_STATUS,
-                "mode": CURRENT_MODE
-            }
-
-        price = data.get("price")
-        ch = data.get("change")
-        chp = data.get("change_pct")
+            if status != "ok" or not data:
+               response = "Market data is unavailable right now."
+            else:
+                price = (
+                   data[0].get("close")
+                   if isinstance(data, list)
+                   else data.get("price")
+                )
+                response = f"{symbol} price fetched via {source}: {price}"
 
         return {
-            "response": f"{symbol} is trading at {price} ({ch:+.2f}, {chp:+.2f}%).",
+            "response": response,
             "status": "Online",
             "mode": CURRENT_MODE
         }
+
 
     # --- Main reasoning (LLM) ---
     try:

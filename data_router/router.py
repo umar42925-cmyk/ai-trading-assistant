@@ -7,11 +7,16 @@ def get_market_data(symbol, interval):
         try:
             data = broker_fetch(symbol, interval)
             print("[DATA ROUTER] source=broker")
-            return data, "broker"
+            return data, "broker", "ok"
 
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[DATA ROUTER] broker failed: {e}")
 
-    data = fetch_twelve_data(symbol, interval)
-    print("[DATA ROUTER] source=twelve_data")
-    return data, "twelve_data"
+    try:
+        data = fetch_twelve_data(symbol, interval)
+        print("[DATA ROUTER] source=twelve_data")
+        return data, "twelve_data", "ok"
+
+    except Exception as e:
+        print(f"[DATA ROUTER] twelve_data failed: {e}")
+        return None, None, "unavailable"
