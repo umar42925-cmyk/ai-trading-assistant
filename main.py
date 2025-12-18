@@ -58,7 +58,25 @@ bias_memory = load_json(
 from symbol_resolver import resolve_symbol
 from market_data_fyers import FyersMarketData
 
+# ==============================
+# GLOBAL MARKET DATA
+# ==============================
+market_data = None
+
+
 console = None
+
+FYERS_CLIENT_ID = os.getenv("FYERS_CLIENT_ID")
+FYERS_ACCESS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
+
+if FYERS_CLIENT_ID and FYERS_ACCESS_TOKEN:
+    try:
+        market_data = FyersMarketData(
+            client_id=FYERS_CLIENT_ID,
+            access_token=FYERS_ACCESS_TOKEN
+        )
+    except Exception:
+        market_data = None
 
 
 
@@ -906,6 +924,8 @@ def render_error_banner(console, message, level="warning"):
     )
 
 def process_user_input(user_input: str) -> dict:
+
+    global market_data
     """
     Safe adapter for external UIs (Streamlit, API, etc.)
 
@@ -1032,14 +1052,6 @@ def main():
    
 
     # load persistent memory used by bias commands
-
-    APP_ID = os.getenv("FYERS_CLIENT_ID")
-
-    FYERS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
-
-    market_data = None
-    if FYERS_TOKEN:
-        market_data = FyersMarketData(APP_ID, FYERS_TOKEN)
 
     while True:
         user_input = console.input("[bold cyan]👤 You:[/bold cyan] ").strip()
