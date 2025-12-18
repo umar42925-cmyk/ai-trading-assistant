@@ -52,25 +52,29 @@ with st.form("chat_form", clear_on_submit=True):
 # Handle submission (ONLY logic entry point)
 # --------------------------------------------------
 if submitted and user_input:
-    result = process_user_input(user_input)
+    try:
+        result = process_user_input(user_input)
 
-    ai_text = result.get("response")
-    status = result.get("status", "Online")
-    mode = result.get("mode", st.session_state.mode)
+        if not isinstance(result, dict):
+            raise ValueError("Invalid response format from process_user_input")
+
+        ai_text = result.get("response")
+        status = result.get("status", "Online")
+        mode = result.get("mode", st.session_state.mode)
+
+    except Exception as e:
+        ai_text = f"⚠️ Internal error: {e}"
+        status = "Offline"
+        mode = st.session_state.mode
 
     st.session_state.status = status
     st.session_state.mode = mode
 
     st.session_state.chat.append(("You", user_input))
-
-    if ai_text:
-        st.session_state.chat.append(("AI", ai_text))
-    else:
-        st.session_state.chat.append(
-            ("AI", "⚠️ No response received. Please try again.")
-        )
+    st.session_state.chat.append(("AI", ai_text))
 
     st.rerun()
+
 
 # --------------------------------------------------
 # Render chat
