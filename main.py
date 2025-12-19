@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # safe: does nothing on Streamlit Cloud
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 os.makedirs("memory", exist_ok=True)
 
@@ -252,6 +252,10 @@ Rules:
 2. Documented project decisions
 3. Repeated behavioral patterns
 
+1. The Agent must NEVER claim to save, delete, update, or modify memory.
+   Only the system may confirm such actions.
+
+
 ---
 
 ## 6. MODEL & TOOL AGNOSTICISM
@@ -453,6 +457,78 @@ def auto_journal_trading(user_input, model_response):
     journal["entries"].append(entry)
     save_json(journal_path, journal)
 
+def extract_intent(user_input: str) -> dict:
+    prompt = f"""
+You are an intent classifier for a personal AI system.
+
+Your job is to classify the user's message into ONE intent from the list below
+and return a JSON object that strictly follows the schema.
+
+You MUST focus on the MEANING of the message, not specific words.
+Do NOT answer the user.
+Do NOT explain anything.
+Return VALID JSON only.
+
+--------------------------------
+INTENTS (choose exactly one):
+
+1. normal_chat
+- General conversation
+- Questions or requests with no persistent change
+
+2. set_preference
+- User expresses a desired default behavior
+- User asks for a persistent style or behavior change
+
+3. remove_preference
+- User asks to stop or undo a previously set preference
+
+4. query_identity
+- User asks what you know about them
+- User asks about stored facts or preferences
+
+5. add_core_memory
+- User explicitly asks you to remember a fact about them
+
+6. remove_core_memory
+- User explicitly asks you to forget or correct stored identity information
+
+--------------------------------
+OUTPUT FORMAT (STRICT JSON):
+
+For normal_chat:
+{{ "intent": "normal_chat" }}
+
+For set_preference:
+{{ "intent": "set_preference", "key": "<preference_key>", "value": "<preference_value>" }}
+
+For remove_preference:
+{{ "intent": "remove_preference", "key": "<preference_key>" }}
+
+For add_core_memory:
+{{ "intent": "add_core_memory", "fact": "<fact_to_store>" }}
+
+For remove_core_memory:
+{{ "intent": "remove_core_memory", "key": "<what_to_remove>" }}
+
+--------------------------------
+User input:
+\"\"\"{user_input}\"\"\"
+"""
+
+
+    resp = client.chat.completions.create(
+        model="route-llm",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+
+    try:
+        return json.loads(resp.choices[0].message.content)
+    except Exception:
+        return {"intent": "normal_chat"}
+
+
 
 
 
@@ -472,22 +548,14 @@ def load_memory():
 
     with open(MEMORY_FILE, "r") as f:
         return json.load(f)
-def handle_memory_command(user_input, core_memory):
-    text = user_input.lower()
-
-    if text.startswith("remember"):
-        fact = user_input.replace("remember", "", 1).strip()
-
-        if fact:
-            core_memory.setdefault("facts", []).append({
-                "fact": fact,
-                "added_at": datetime.now().isoformat()
-            })
-
-            save_json("memory/core_memory.json", core_memory)
-            return f"I've saved this: {fact}"
 
     return None
+
+def handle_memory_command(user_input, core_memory):
+    return None
+
+
+
 def check_fyers():
     try:
         from data.fyers_client import fyers_health_check
@@ -930,6 +998,11 @@ def render_error_banner(console, message, level="warning"):
         )
     )
 
+    # INVARIANT:
+# - LLM may interpret intent
+# - Only apply_memory_action may change memory
+
+
 def process_user_input(user_input: str) -> dict:
 
     global market_data
@@ -958,6 +1031,86 @@ def process_user_input(user_input: str) -> dict:
             "status": UI_STATUS,
             "mode": CURRENT_MODE
         }
+
+
+    intent = extract_intent(user_input)
+
+    # -------------------------
+    # MEMORY WRITE — EXPLICIT ONLY
+    # -------------------------
+    from memory.memory_authority import apply_memory_action
+
+    if intent["intent"] == "add_core_memory":
+        action = {
+            "type": "ADD_FACT",
+            "fact": intent["fact"]
+        }
+
+        result = apply_memory_action(action, core_memory)
+
+        if result.get("applied"):
+            # persist to disk
+            with open("memory/core_memory.json", "w") as f:
+                json.dump(core_memory, f, indent=2)
+
+            return {
+                "response": "Okay, I’ve saved that.",
+                "status": UI_STATUS,
+                "mode": CURRENT_MODE
+            }
+        else:
+            return {
+                "response": "I decided not to save that.",
+                "status": UI_STATUS,
+                "mode": CURRENT_MODE
+            }
+    
+    # -------------------------
+    # IDENTITY — SYSTEM OWNED
+    # -------------------------
+
+    if intent["intent"] == "query_identity":
+        for f in core_memory.get("facts", []):
+            if "name" in f.get("fact", "").lower():
+                return {
+                    "response": f["fact"],
+                    "status": UI_STATUS,
+                    "mode": CURRENT_MODE
+                }
+        return {
+            "response": "I don’t know your name yet.",
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE
+        }
+ 
+
+    from memory.memory_authority import apply_memory_action
+
+    if intent["intent"] == "correct_identity":
+        action = {
+            "type": "REMOVE_FACT",
+            "key": "name"
+        }
+        result = apply_memory_action(action, core_memory)
+
+        if result["applied"]:
+            msg = "Thanks for correcting me. I’ve updated my records."
+        else:
+            msg = "Thanks — there was nothing to correct."
+
+        return {
+            "response": msg,
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE
+
+        }
+    from memory.memory_manager import promote_to_preferences
+
+    preferences = load_json("memory/preferences.json", {"preferences": []})
+    with open("memory/preferences.json", "w") as f:
+        json.dump(preferences, f, indent=2)
+
+
 
     # --- Mode detection ---
     new_mode = detect_mode(user_input)
@@ -1211,16 +1364,27 @@ def auto_learn(user_input, working_memory):
 
     observations = working_memory.get("observations", [])
 
+    now = datetime.now().isoformat(timespec="seconds")
+
     for o in observations:
         if o["trait"] == trait:
-            o["confidence"] = min(o["confidence"] + 0.1, 1.0)
-            break
+            # Backward compatibility for legacy observations
+           o["count"] = o.get("count", 1)
+           o["first_seen"] = o.get("first_seen", now)
+
+           o["count"] += 1
+           o["last_seen"] = now
+           o["confidence"] = min(o.get("confidence", 0.6) + 0.05, 0.75)
+           break
+
     else:
         observations.append({
-            "trait": trait,
-            "confidence": 0.6,
-            "last_observed": datetime.now().isoformat(timespec="seconds")
-        })
+         "trait": trait,
+         "confidence": 0.6,
+         "count": 1,
+         "first_seen": datetime.now().isoformat(timespec="seconds"),
+         "last_seen": datetime.now().isoformat(timespec="seconds")
+    })
 
     working_memory["observations"] = observations
 
