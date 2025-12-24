@@ -11,7 +11,24 @@ load_dotenv()  # safe: does nothing on Streamlit Cloud
 
 from datetime import datetime, timedelta
 
+IDENTITY_CONFLICT_WINDOW = timedelta(days=2)
+CONFIDENCE_DECAY_PER_DAY = 0.05
+CONFIDENCE_MIN_THRESHOLD = 0.3
+SOFT_DELETE_AFTER_DAYS = 14
+PENDING_IDENTITY_CONFIRMATION = None
+
+
+
+from memory.memory_authority import apply_memory_action, query_fact
+
+
 os.makedirs("memory", exist_ok=True)
+
+PERSON_ENTITIES = {
+    "self", "wife", "husband", "partner",
+    "father", "mother", "brother", "sister",
+    "son", "daughter", "friend", "best_friend"
+}
 
 def load_json(path, default):
     """
@@ -38,10 +55,16 @@ working_memory = load_json(
         {"observations": []}
     )
 
-core_memory = load_json(
-        "memory/core_memory.json",
-        {"facts": []}
-    )
+core_identity = load_json(
+    "memory/core_identity.json",
+    {"facts": []}
+)
+
+state_memory = load_json(
+    "memory/state_memory.json",
+    {"states": []}
+)
+
 
 bias_memory = load_json(
         "memory/bias.json",
@@ -391,7 +414,7 @@ client = OpenAI(
     base_url="https://routellm.abacus.ai/v1"  # ⬅️ BASE ONLY
 )
 
-def routellm_think(user_input, working_memory, core_memory):
+def routellm_think(user_input, working_memory, core_identity):
     messages = [
         {"role": "system", "content": AGENT_CONSTITUTION.strip()},
         {"role": "system", "content": MEMORY_POLICY.strip()},
@@ -403,7 +426,7 @@ def routellm_think(user_input, working_memory, core_memory):
         {
             "role": "system",
             "content": "Core facts:\n"
-            + json.dumps(core_memory.get("facts", []), indent=2)
+            + json.dumps(core_identity.get("facts", []), indent=2)
         },
         {"role": "user", "content": user_input},
     ]
@@ -459,100 +482,220 @@ def auto_journal_trading(user_input, model_response):
 
 def extract_intent(user_input: str) -> dict:
     prompt = f"""
-You are an intent classifier for a personal AI system.
+You are an intent and memory-structuring engine for a personal AI system.
 
-Your job is to classify the user's message into ONE intent from the list below
-and return a JSON object that strictly follows the schema.
+Your job is to analyze the user's message and return a SINGLE JSON object
+that strictly follows ONE of the schemas below.
 
-You MUST focus on the MEANING of the message, not specific words.
-Do NOT answer the user.
-Do NOT explain anything.
-Return VALID JSON only.
+You MUST understand meaning, not keywords.
+You MUST NOT guess facts.
+You MUST NOT answer the user.
+You MUST return VALID JSON ONLY.
 
---------------------------------
-INTENTS (choose exactly one):
+==============================
+INTENT TYPES (CHOOSE ONE)
+==============================
 
 1. normal_chat
-- General conversation
-- Questions or requests with no persistent change
+Use when the message does NOT request memory storage,
+memory removal, preference changes, or factual recall.
 
-2. set_preference
-- User expresses a desired default behavior
-- User asks for a persistent style or behavior change
-
-3. remove_preference
-- User asks to stop or undo a previously set preference
-
-4. query_identity
-- User asks what you know about them
-- User asks about stored facts or preferences
-
-5. add_core_memory
-- User explicitly asks you to remember a fact about them
-
-6. remove_core_memory
-- User explicitly asks you to forget or correct stored identity information
-
---------------------------------
-OUTPUT FORMAT (STRICT JSON):
-
-For normal_chat:
+Schema:
 {{ "intent": "normal_chat" }}
 
-For set_preference:
-{{ "intent": "set_preference", "key": "<preference_key>", "value": "<preference_value>" }}
+------------------------------
 
-For remove_preference:
-{{ "intent": "remove_preference", "key": "<preference_key>" }}
+2. add_core_identity
+Use when the user states a stable personal identity
+or relationship fact about themselves or their personal world.
 
-For add_core_memory:
-{{ "intent": "add_core_memory", "fact": "<fact_to_store>" }}
+This includes explicit memory requests AND
+clear factual statements that describe stable relationships.
 
-For remove_core_memory:
-{{ "intent": "remove_core_memory", "key": "<what_to_remove>" }}
+You MUST extract the information into structured form.
 
---------------------------------
-User input:
+Schema:
+{{
+  "intent": "add_core_identity",
+  "domain": "<personal | trading>",
+  "entity": "<entity>",
+  "attribute": "<attribute>",
+  "value": "<value>"
+
+}}
+
+Examples:
+User: "Remember my wife's name is Roohi"
+→ {{
+    "intent": "add_core_identity",
+    "entity": "wife",
+    "attribute": "name",
+    "value": "Roohi"
+  }}
+
+User: "Save that I trade crypto"
+→ {{
+    "intent": "add_core_identity",
+    "entity": "self",
+    "attribute": "trades",
+    "value": "crypto"
+  }}
+User: "Sam is my friend"
+→ {{
+    "intent": "add_core_identity",
+    "entity": "friend",
+    "attribute": "name",
+    "value": "Sam"
+  }}
+
+
+------------------------------
+
+3. remove_core_identity
+Use ONLY when the user explicitly asks to forget,
+remove, or correct a stored fact.
+
+Schema:
+{{
+  "intent": "remove_core_identity",
+  "entity": "<entity>",
+  "attribute": "<attribute>"
+}}
+
+------------------------------
+
+4. query_identity
+Use when the user asks for a factual detail about themselves
+or their stored personal information.
+
+Schema:
+{{
+  "intent": "query_identity",
+  "domain": "<personal | trading>",
+  "entity": "<entity>",
+  "attribute": "<attribute>"
+}}
+Examples:
+
+User: "What is my wife's name?"
+→ {{
+  "intent": "query_identity",
+  "domain": "personal",
+  "entity": "wife",
+  "attribute": "name"
+}}
+
+User: "What is my strategy?"
+→ {{
+  "intent": "query_identity",
+  "domain": "trading",
+  "entity": "strategy",
+  "attribute": "risk_profile"
+}}
+
+
+------------------------------
+
+5. set_preference
+Use when the user asks for a persistent change
+in how the assistant behaves or responds.
+
+Schema:
+{{
+  "intent": "set_preference",
+  "entity": "assistant",
+  "attribute": "<preference_type>",
+  "value": "<preference_value>"
+}}
+
+------------------------------
+
+6. remove_preference
+Use when the user asks to undo a previously set preference.
+
+Schema:
+{{
+  "intent": "remove_preference",
+  "entity": "assistant",
+  "attribute": "<preference_type>"
+}}
+
+7. add_symbol_belief
+Use when the user expresses a belief, bias, or conviction
+about a specific market instrument or symbol.
+
+This is NOT a diary entry.
+This is NOT a personal identity fact.
+
+Examples:
+User: "I think NIFTY looks weak"
+User: "I’m bullish on BTC"
+User: "BANKNIFTY feels overextended"
+
+Schema:
+{{
+  "intent": "add_symbol_belief",
+  "symbol": "<instrument>",
+  "belief": "<belief_statement>",
+  "confidence": "<0.0 - 1.0 optional>"
+}}
+
+
+==============================
+IMPORTANT RULES
+==============================
+
+-ATTRIBUTES ARE NOT LIMITED.
+
+The "attribute" field is an open-ended semantic label inferred from meaning.
+You are NOT restricted to attributes shown in examples.
+Choose the most appropriate attribute name based on the user's intent.
+
+Examples are illustrative, not exhaustive.
+
+
+- Do NOT invent entities or attributes.
+- If the message is ambiguous, choose normal_chat.
+- Do NOT include explanations.
+- Do NOT include markdown.
+- Do NOT include extra keys.
+- Output MUST be valid JSON.
+- Exactly ONE intent per message.
+
+
+==============================
+USER MESSAGE
+==============================
 \"\"\"{user_input}\"\"\"
-"""
+"""               
 
 
     resp = client.chat.completions.create(
-        model="route-llm",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0
-    )
+    model="route-llm",
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "You are a classification engine for personal facts.\n"
+                "Some facts are naturally SINGLE (wife, mother, father).\n"
+                "Some facts are naturally MULTIPLE (friends, hobbies, beliefs).\n"
+                "Your job is to decide plurality using common human understanding.\n"
+                "Do NOT assume facts are single by default."
+            )
+        },
+        {
+            "role": "user",
+            "content": prompt
+        }
+    ],
+    temperature=0
+)
+
 
     try:
         return json.loads(resp.choices[0].message.content)
     except Exception:
         return {"intent": "normal_chat"}
-
-
-
-
-
-def load_memory():
-    if not os.path.exists(MEMORY_FILE):
-        return {
-            "user_profile": {"role": "trader", "notes": ""},
-            "bias": {
-                "current": None,
-                "based_on": None,
-                "confidence": None,
-                "invalidated_if": None,
-                "last_invalidated_reason": None,
-            },
-            "bias_history": [],
-        }
-
-    with open(MEMORY_FILE, "r") as f:
-        return json.load(f)
-
-    return None
-
-def handle_memory_command(user_input, core_memory):
-    return None
 
 
 
@@ -593,90 +736,166 @@ def show_preferences(working_memory):
     for o in observations:
         trait = o.get("trait")
         confidence = o.get("confidence", 0)
-        print(f"• You {trait} (confidence: {confidence:.2f})")
+        print(f"• You {trait} (confidence: {confidence:.2f})")  
 
+def get_latest_identity_audit(entity: str, attribute: str):
+    path = "memory/promotion_audit.json"
+    data = load_json(path, {"events": []})
 
-def save_memory(memory):
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(memory, f, indent=2)
-def handle_bias_command(user_input, bias_memory):
-    text = user_input.lower()
-
-    if text.startswith("review bias history"):
-        history = bias_memory.get("history", [])
-        if not history:
-            return "No bias history yet."
-
-        lines = []
-        for h in history[-10:]:
-            if h["action"] == "set":
-                lines.append(f"[{h['timestamp']}] SET → {h['bias']}")
-            else:
-                lines.append(f"[{h['timestamp']}] INVALIDATE → {h['reason']}")
-
-        return "\n".join(lines)
-
-    if text.startswith("set bias"):
-        parts = user_input.split()
-
-        if len(parts) < 3:
-            return "Usage: set bias <bullish|bearish|neutral>"
-
-        bias_memory["current"] = parts[2]
-
-        if "on" in parts:
-            bias_memory["based_on"] = parts[parts.index("on") + 1]
-
-        if "confidence" in parts:
-            bias_memory["confidence"] = parts[parts.index("confidence") + 1]
-
-        if "invalidate" in parts:
-            bias_memory["invalidated_if"] = " ".join(
-                parts[parts.index("invalidate") + 1 :]
-            )
-
-        bias_memory["history"].append({
-            "action": "set",
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "bias": bias_memory["current"]
-        })
-
-        with open("memory/bias.json", "w") as f:
-            json.dump(bias_memory, f, indent=2)
-
-        return "Bias set and saved."
-
-    if text.startswith("invalidate bias"):
-        reason = user_input.replace("invalidate bias", "").strip()
-
-        if not reason:
-            return "Please provide a reason to invalidate the bias."
-
-        bias_memory["history"].append({
-            "action": "invalidate",
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "reason": reason
-        })
-
-        bias_memory.update({
-            "current": None,
-            "based_on": None,
-            "confidence": None,
-            "invalidated_if": None,
-            "last_invalidated_reason": reason
-        })
-
-        with open("memory/bias.json", "w") as f:
-            json.dump(bias_memory, f, indent=2)
-
-        return "Bias invalidated and cleared."
-
-    if text.startswith("review bias"):
-        return f"Current bias: {bias_memory}"
+    for e in reversed(data.get("events", [])):
+        if e.get("entity") == entity and e.get("attribute") == attribute:
+            return e
 
     return None
 
-def reasoning_layer(user_input, working_memory, core_memory, bias_memory):
+def explain_non_promotion(audit_event: dict) -> str:
+    if not audit_event:
+        return "I don’t have enough consistent information yet."
+
+    reason = audit_event.get("reason")
+
+    explanations = {
+        "threshold_not_met":
+            "I’ve only seen this mentioned once so far, so I’m waiting for more confirmation.",
+
+        "conflict_window":
+            "I’ve seen conflicting information recently, so I’m waiting for things to settle.",
+
+        "inactive_candidate":
+            "This was mentioned earlier, but it hasn’t come up again for a while.",
+
+        "confidence_decay":
+            "This information hasn’t been reinforced recently, so I’m less confident about it."
+    }
+
+    return explanations.get(
+        reason,
+        "I’m still observing before recording this."
+    )
+
+
+def log_promotion_audit(entry: dict):
+    path = "memory/promotion_audit.json"
+
+    audit = load_json(path, {"events": []})
+
+    entry["timestamp"] = datetime.now().isoformat(timespec="seconds")
+
+    audit["events"].append(entry)
+
+    with open(path, "w") as f:
+        json.dump(audit, f, indent=2)
+
+
+
+def promote_identity_candidates(working_memory):
+    updated = False
+    remaining = []
+
+    now = datetime.now()
+
+    for o in working_memory.get("observations", []):
+        if o.get("type") != "identity_candidate":
+            remaining.append(o)
+            continue
+        if o.get("active") is False:
+            log_promotion_audit({
+              "result": "blocked",
+              "entity": o["entity"],
+              "attribute": o["attribute"],
+              "value": o["value"],
+              "confidence": o.get("confidence"),
+              "count": o.get("count"),
+              "reason": "inactive_candidate"
+           })
+            remaining.append(o)
+            continue
+
+
+        # --- Conflict suppression ---
+        conflict = False
+        o_last = datetime.fromisoformat(o["last_seen"])
+
+        for other in working_memory.get("observations", []):
+            if (
+                other is not o
+                and other.get("type") == "identity_candidate"
+                and other["entity"] == o["entity"]
+                and other["attribute"] == o["attribute"]
+                and other["value"] != o["value"]
+            ):
+                other_last = datetime.fromisoformat(other["last_seen"])
+                if abs(o_last - other_last) <= IDENTITY_CONFLICT_WINDOW:
+                    conflict = True
+                    break
+
+        if conflict:
+            log_promotion_audit({
+              "result": "blocked",
+              "entity": o["entity"],
+              "attribute": o["attribute"],
+              "value": o["value"],
+              "confidence": o.get("confidence"),
+              "count": o.get("count"),
+              "reason": "conflict_window"
+            })
+
+            remaining.append(o)
+            continue
+
+        # --- Promotion eligibility ---
+        if (
+            o.get("confidence", 0) >= 0.75
+            or o.get("count", 0) >= 2
+        ):
+
+            action = {
+                "type": "ADD_FACT",
+                "domain": "personal",
+                "entity": o["entity"],
+                "attribute": o["attribute"],
+                "value": o["value"],
+                "owner": "self",
+                "source": "promotion",
+                "confidence": o["confidence"]
+            }
+
+            apply_memory_action(action)
+            updated = True
+            log_promotion_audit({
+              "result": "promoted",
+              "entity": o["entity"],
+              "attribute": o["attribute"],
+              "value": o["value"],
+              "confidence": o.get("confidence"),
+              "count": o.get("count"),
+              "reason": "thresholds_met"
+            })
+
+        else:
+            log_promotion_audit({
+                "result": "blocked",
+                "entity": o["entity"],
+                "attribute": o["attribute"],
+                "value": o["value"],
+                "confidence": o.get("confidence"),
+                "count": o.get("count"),
+                "reason": "threshold_not_met"
+            })
+            remaining.append(o)
+
+
+    if updated:
+        working_memory["observations"] = remaining
+        with open("memory/working_memory.json", "w") as f:
+            json.dump(working_memory, f, indent=2)
+
+    return updated
+
+
+
+
+def reasoning_layer(user_input, working_memory, core_identity, bias_memory):
     global last_presented_traits
     text = user_input.lower()
 
@@ -697,7 +916,8 @@ def reasoning_layer(user_input, working_memory, core_memory, bias_memory):
             else "I haven’t learned any stable patterns about you yet."
         )
 
-    if text.startswith("confirm that"):
+    if text.startswith("confirm that") and not PENDING_IDENTITY_CONFIRMATION:
+
         if not last_presented_traits:
             return "There is nothing recent to confirm."
 
@@ -709,56 +929,7 @@ def reasoning_layer(user_input, working_memory, core_memory, bias_memory):
 
         return "Got it. I’ve increased confidence in those traits."
 
-    if text.startswith("reject that"):
-        if not last_presented_traits:
-            return "There is nothing recent to reject."
-
-        working_memory["observations"] = [
-            o for o in working_memory.get("observations", [])
-            if o not in last_presented_traits
-        ]
-
-        with open("memory/working_memory.json", "w") as f:
-            json.dump(working_memory, f, indent=2)
-
-        last_presented_traits = []
-        return "Understood. I’ve removed those traits."
-
-    return routellm_think(user_input, working_memory, core_memory)
-
-
-def show_core_facts(core_memory):
-    facts = core_memory.get("facts", [])
-    if not facts:
-        ai_response = "I don’t know much about you yet."
-        console.print(
-            Panel(
-                Markdown(ai_response),
-                title="🤖 AI",
-                border_style="green"
-            )
-        )
-        console.print(Rule(style="dim"))
-        return
-
-    ai_response = "Here’s what I know about you:"
-    console.print(
-        Panel(
-            Markdown(ai_response),
-            title="🤖 AI",
-            border_style="green"
-        )
-    )
-    console.print(Rule(style="dim"))
-    for f in facts:
-        text = f["fact"]
-        text = (
-            text.replace("My ", "Your ")
-                .replace("my ", "your ")
-                .replace(" I ", " you ")
-                .replace("I ", "You ")
-        )
-        print(f"• {text}")
+    return routellm_think(user_input, working_memory, core_identity)
 
 
 def detect_mode(user_input):
@@ -855,6 +1026,87 @@ def is_casual_chat(text: str) -> bool:
 
 
 import re
+
+def decide_cardinality_llm(
+    entity: str,
+    attribute: str,
+    value: str,
+    existing_facts: list,
+    user_input: str
+) -> dict:
+    """
+    LLM decides whether a new fact is:
+    - single/conflict
+    - multiple/append
+    - multiple/duplicate
+
+    This function MUST NOT write memory.
+    It returns structured JSON only.
+    """
+
+    prompt = f"""
+You are deciding how a new personal fact should be handled.
+
+Existing facts (same entity + attribute):
+{json.dumps(existing_facts, indent=2)}
+
+New statement:
+"{user_input}"
+
+Proposed new fact:
+entity = "{entity}"
+attribute = "{attribute}"
+value = "{value}"
+
+Decide ONE of the following actions:
+1. conflict  → single-cardinality, incompatible
+2. append    → valid additional fact
+3. duplicate → same fact already exists
+
+Output STRICT JSON ONLY in this schema:
+
+{{
+  "cardinality": "single" | "multiple",
+  "action": "conflict" | "append" | "duplicate"
+}}
+
+Do NOT explain.
+Do NOT add extra keys.
+"""
+
+    try:
+        resp = client.chat.completions.create(
+            model="route-llm",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a classification engine for personal facts.\n"
+                        "Some relationships are naturally SINGLE (wife, mother, father).\n"
+                        "Some relationships are naturally MULTIPLE (friends, hobbies, beliefs).\n"
+                        "Use common human understanding.\n"
+                        "Do NOT assume identity facts are single by default."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0
+        )
+
+
+        decision = json.loads(resp.choices[0].message.content)
+        return decision
+
+    except Exception:
+        # ultra-safe fallback: assume single & conflict
+        return {
+            "cardinality": "single",
+            "action": "conflict"
+        }
+
 
 def requires_live_price(text: str) -> bool:
     t = text.lower()
@@ -1003,25 +1255,164 @@ def render_error_banner(console, message, level="warning"):
 # - Only apply_memory_action may change memory
 
 
+
+def handle_identity_confirmation():
+    global PENDING_IDENTITY_CONFIRMATION
+    info = PENDING_IDENTITY_CONFIRMATION
+    if not info:
+        return {
+            "response": "There is nothing pending to confirm.",
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE
+        }
+
+    candidates = info.get("candidates", [])
+
+
+    if not candidates:
+        return {
+            "response": "There is nothing pending to confirm.",
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE
+        }
+
+    best = sorted(
+        candidates,
+        key=lambda c: (c.get("confidence", 0), c.get("last_seen", "")),
+        reverse=True
+    )[0]
+
+    apply_memory_action({
+        "type": "ADD_FACT",
+        "domain": "personal",
+        "entity": info["entity"],
+        "attribute": info["attribute"],
+        "value": best["value"],
+        "owner": "self",
+        "source": "user_confirmation",
+        "confidence": 1.0
+    })
+
+    # --- clear pending identity state ---
+    working_memory["observations"] = [
+        o for o in working_memory.get("observations", [])
+        if not (
+            o.get("type") == "identity_candidate"
+            and o.get("entity") == info["entity"]
+            and o.get("attribute") == info["attribute"]
+        )
+    ]
+    save_json("memory/working_memory.json", working_memory)
+
+    PENDING_IDENTITY_CONFIRMATION = None
+
+    return {
+        "response": "Confirmed.",
+        "status": UI_STATUS,
+        "mode": CURRENT_MODE
+    }
+
+
+
+
+
 def process_user_input(user_input: str) -> dict:
 
-    global market_data
-    """
-    Safe adapter for external UIs (Streamlit, API, etc.)
-
-    Returns:
-    {
-        "response": str | None,
-        "status": "Online" | "Rate-limited" | "Offline",
-        "mode": str
-    }
-    """
+    global PENDING_IDENTITY_CONFIRMATION
     global CURRENT_MODE, UI_STATUS
 
     ai_response = None
     model_response = None
 
+
     lower = user_input.lower().strip()
+    
+    # =====================================================
+    # IMPLICIT CONFIRMATION HANDLING (GLOBAL, EARLY EXIT)
+    # =====================================================
+    if PENDING_IDENTITY_CONFIRMATION:
+        try:
+            # Use existing RouteLLM (no new brain, no keywords)
+            resp = client.chat.completions.create(
+                model="route-llm",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You detect whether a user message confirms previously "
+                            "mentioned information. Answer ONLY yes or no."
+                        ),
+                    },
+                    {"role": "user", "content": user_input},
+                ],
+                temperature=0,
+            )
+
+            decision = resp.choices[0].message.content.strip().lower()
+        except Exception:
+            decision = "no"
+
+        if decision.startswith("yes"):
+            return handle_identity_confirmation()
+
+
+     # --- confirmation-based identity promotion ---
+    if lower in {
+        "yes", "yes that's correct", "yes that’s correct",
+        "correct", "that's right", "confirm", "confirm that"
+    }:
+        if PENDING_IDENTITY_CONFIRMATION:
+
+            info = PENDING_IDENTITY_CONFIRMATION
+            candidates = info.get("candidates")
+
+            if not candidates:
+                return {
+                    "response": "There’s nothing pending that needs confirmation.",
+                    "status": UI_STATUS,
+                    "mode": CURRENT_MODE
+                }
+    
+            # pick strongest candidate
+            candidate = sorted(
+                candidates,
+                key=lambda o: (o.get("confidence", 0), o.get("last_seen", "")),
+                reverse=True
+            )[0]
+
+            action = {
+                "type": "ADD_FACT",
+                "domain": "personal",
+                "entity": info["entity"],
+                "attribute": info["attribute"],
+                "value": candidate["value"],
+                "owner": "self",
+                "source": "user_confirmation",
+                "confidence": 1.0
+            }
+
+            apply_memory_action(action)
+
+            # remove all pending candidates for this slot
+            working_memory["observations"] = [
+                o for o in working_memory.get("observations", [])
+                if not (
+                    o.get("type") == "identity_candidate"
+                    and o.get("entity") == info["entity"]
+                    and o.get("attribute") == info["attribute"]
+                )
+            ]
+
+            save_json("memory/working_memory.json", working_memory)
+    
+            PENDING_IDENTITY_CONFIRMATION = None
+
+            return {
+                "response": f"Got it. I’ve updated that to {candidate['value']}.",
+                "status": UI_STATUS,
+                "mode": CURRENT_MODE
+            }
+
 
     # --- Slash commands (reuse existing handler) ---
     if lower.startswith("/"):
@@ -1032,86 +1423,296 @@ def process_user_input(user_input: str) -> dict:
             "mode": CURRENT_MODE
         }
 
-
     intent = extract_intent(user_input)
 
-    # -------------------------
-    # MEMORY WRITE — EXPLICIT ONLY
-    # -------------------------
-    from memory.memory_authority import apply_memory_action
+    # Default domain for memory ops
+    if intent.get("intent") == "add_core_identity":
+        intent.setdefault("domain", CURRENT_MODE)
 
-    if intent["intent"] == "add_core_memory":
+
+    # Implicit name rule for people
+    if intent.get("intent") == "add_core_identity":
+        if not intent.get("attribute") and intent.get("entity") in PERSON_ENTITIES:
+            intent["attribute"] = "name"
+
+
+    # =========================================================
+    # 🔒 IDENTITY LOCK — NO LLM FALLBACK (PERMANENT)
+    # If the intent is query_identity, the response MUST
+    # come ONLY from structured memory.
+    # The LLM is NEVER allowed to answer identity questions.
+    # =========================================================
+    
+
+        # -----------------------------------------------------
+    # PLURALITY GUARD (TEST-FIRST, NO SCHEMA CHANGE)
+    # Handles cases like: "Sam is my friend also"
+    # -----------------------------------------------------
+    if (
+        intent.get("intent") == "add_core_identity"
+        and intent.get("entity") == "friend"
+        and "also" in lower
+    ):
+        # Multiple friends implied → do NOT retry core identity write
+        auto_learn(user_input, working_memory)
+        return {
+            "response": "Okay.",
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE
+        }
+
+    # --- WRITE ---
+    if intent["intent"] == "add_core_identity" and (
+        "remember" in lower
+        or "save" in lower
+        or "from now on" in lower
+    ):
+        domain = "personal"
         action = {
             "type": "ADD_FACT",
-            "fact": intent["fact"]
+            "domain": domain,
+            "entity": intent["entity"],
+            "attribute": intent["attribute"],
+            "value": intent["value"],
+            "owner": "self"
         }
+        from memory.memory_authority import load_identity_memory
 
-        result = apply_memory_action(action, core_memory)
+        memory = load_identity_memory()
+
+        existing_facts = [
+            f for f in memory.get("facts", [])
+            if (
+                f["entity"] == intent["entity"]
+                and f["attribute"] == intent["attribute"]
+           )
+       ]
+
+        decision = decide_cardinality_llm(
+            entity=intent["entity"],
+            attribute=intent["attribute"],
+            value=intent["value"],
+            existing_facts=existing_facts,
+            user_input=user_input
+        )
+        print("CARDINALITY DECISION:", decision)
+
+        # -------------------------------------------------
+        # CARDINALITY ENFORCEMENT (STEP 2)
+        # -------------------------------------------------
+
+        # 1️⃣ SINGLE → CONFLICT (do NOT write)
+        if decision["action"] == "conflict":
+            return {
+                "response": (
+                    f"I already have this recorded as "
+                    f"'{existing_facts[-1]['value']}'. "
+                    f"If this is incorrect, please say "
+                    f"'Update my {intent['entity']}'s {intent['attribute']}'."
+                ),
+                "status": UI_STATUS,
+                "mode": CURRENT_MODE
+            }
+
+        # 2️⃣ MULTIPLE → DUPLICATE (no write)
+        if decision["action"] == "duplicate":
+            return {
+                "response": "Okay.",
+                "status": UI_STATUS,
+                "mode": CURRENT_MODE
+            }
+
+        # 3️⃣ MULTIPLE → APPEND
+        # fall through → apply_memory_action()
+
+        action["cardinality"] = decision["cardinality"]
+
+        result = apply_memory_action(action)
+        
+        if result.get("conflict"):
+            return {
+                "response": (
+                    f"I already have this recorded as "
+                    f"'{result['existing_value']}'. "
+                    f"If this is incorrect, please say "
+                    f"'Update my {intent['entity']}'s {intent['attribute']}'."
+                ),
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE
+        }
 
         if result.get("applied"):
-            # persist to disk
-            with open("memory/core_memory.json", "w") as f:
-                json.dump(core_memory, f, indent=2)
-
             return {
-                "response": "Okay, I’ve saved that.",
+                "response": "Okay, I've saved that.",
                 "status": UI_STATUS,
                 "mode": CURRENT_MODE
             }
-        else:
-            return {
-                "response": "I decided not to save that.",
-                "status": UI_STATUS,
-                "mode": CURRENT_MODE
-            }
-    
-    # -------------------------
-    # IDENTITY — SYSTEM OWNED
-    # -------------------------
 
-    if intent["intent"] == "query_identity":
-        for f in core_memory.get("facts", []):
-            if "name" in f.get("fact", "").lower():
-                return {
-                    "response": f["fact"],
-                    "status": UI_STATUS,
-                    "mode": CURRENT_MODE
-                }
         return {
-            "response": "I don’t know your name yet.",
+            "response": "I decided not to save that.",
             "status": UI_STATUS,
             "mode": CURRENT_MODE
         }
- 
+    elif intent["intent"] == "add_core_identity":
+        # Implicit identity → working memory only
+        auto_learn(user_input, working_memory)
+        return {
+            "response": "Okay.",
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE
+        }
 
-    from memory.memory_authority import apply_memory_action
+    elif intent["intent"] == "add_symbol_belief":
 
-    if intent["intent"] == "correct_identity":
         action = {
-            "type": "REMOVE_FACT",
-            "key": "name"
+            "type": "ADD_FACT",
+            "domain": "trading",
+            "entity": intent["symbol"],
+            "attribute": "belief",
+            "value": intent["belief"],
+            "confidence": intent.get("confidence", 0.5),
+            "owner": "self",
+            "source": "user"
         }
-        result = apply_memory_action(action, core_memory)
 
-        if result["applied"]:
-            msg = "Thanks for correcting me. I’ve updated my records."
-        else:
-            msg = "Thanks — there was nothing to correct."
+        apply_memory_action(action)
 
         return {
-            "response": msg,
+            "response": "Belief noted.",
             "status": UI_STATUS,
             "mode": CURRENT_MODE
-
         }
-    from memory.memory_manager import promote_to_preferences
 
-    preferences = load_json("memory/preferences.json", {"preferences": []})
-    with open("memory/preferences.json", "w") as f:
-        json.dump(preferences, f, indent=2)
+    
+    elif intent["intent"] == "remember_trading":
+        action = {
+            "type": "ADD_FACT",
+            "domain": "trading",
+            "owner": "self",
+            "entity": intent.get("entity", "self"),
+            "attribute": intent["attribute"],
+            "value": intent["value"],
+            "type_label": "belief",
+            "confidence": intent.get("confidence", 0.5),
+            "source": "user"
+        }
+
+        result = apply_memory_action(action)
+
+        state_memory.clear()
+        state_memory.update(
+            load_json("memory/state_memory.json", {"states": []})
+        )
+
+        return {
+            "response": "Okay, I’ve saved that."
+            if result.get("applied")
+            else "I decided not to save that.",
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE
+        }
+
+    elif intent["intent"] == "add_diary_entry":
+        action = {
+            "type": "ADD_FACT",
+            "domain": "diary",
+            "owner": "self",
+            "entity": "day",
+            "attribute": "entry",
+            "value": intent["value"],
+            "type_label": "experience",
+            "source": "user",
+            "session_id": datetime.utcnow().date().isoformat()
+        }
+
+        apply_memory_action(action)
+
+        return {
+            "response": "Noted.",
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE
+        }
+    
+
+    # --- READ (LOCKED) ---
+    if intent["intent"] == "query_identity":
+        PENDING_IDENTITY_CONFIRMATION = None
+        if intent["domain"] == "personal":
+            from memory.memory_authority import load_identity_memory
+            memory = load_identity_memory()
+        else:
+            memory = load_json("memory/state_memory.json", {"states": []})
+
+        value = query_fact(
+            intent["domain"],
+            intent["entity"],
+            intent["attribute"],
+            memory
+        )
+        # --- Collect all pending identity candidates (Policy B) ---
+        pending_candidates = [
+            o for o in working_memory.get("observations", [])
+            if (
+                o.get("type") == "identity_candidate"
+                and o.get("entity") == intent["entity"]
+                and o.get("attribute") == intent["attribute"]
+                and o.get("active", True)
+            )
+        ]
+
+        if value is not None:
+            response_text = value
+
+            if pending_candidates:
+                names = ", ".join(c["value"] for c in pending_candidates)
+
+                response_text += (
+                    f". However, you recently mentioned {names}, "
+                    f"and I’m waiting for confirmation before updating."
+                )
+
+                PENDING_IDENTITY_CONFIRMATION = {
+                    "entity": intent["entity"],
+                    "attribute": intent["attribute"],
+                    "candidates": pending_candidates
+                }
+
+        else:
+            audit = get_latest_identity_audit(
+                intent["entity"],
+                intent["attribute"]
+            )
+            response_text = explain_non_promotion(audit)
+
+            if audit and audit.get("value"):
+                PENDING_IDENTITY_CONFIRMATION = {
+                    "entity": intent["entity"],
+                    "attribute": intent["attribute"],
+                    "value": audit.get("value")
+                }
+            else:
+                PENDING_IDENTITY_CONFIRMATION = None
+                
+            if pending_candidates:
+                PENDING_IDENTITY_CONFIRMATION = {
+                    "entity": intent["entity"],
+                    "attribute": intent["attribute"],
+                    "candidates": pending_candidates
+                }
+            else:
+                PENDING_IDENTITY_CONFIRMATION = None
+
+        return {
+            "response": response_text,
+            "status": UI_STATUS,
+            "mode": CURRENT_MODE,
+            "meta": {
+                "pending": bool(pending_candidates)
+            }
+        }
 
 
-
+    
     # --- Mode detection ---
     new_mode = detect_mode(user_input)
     if new_mode != CURRENT_MODE:
@@ -1153,7 +1754,7 @@ def process_user_input(user_input: str) -> dict:
         response = reasoning_layer(
             user_input,
             working_memory,
-            core_memory,
+            core_identity,
             bias_memory
         )
         ai_response = clean_ai_output(response)
@@ -1168,6 +1769,8 @@ def process_user_input(user_input: str) -> dict:
     if not ai_response or not ai_response.strip():
         ai_response = "I’m here. What would you like to work on?"
 
+    # --- Final promotion pass ---
+    promote_identity_candidates(working_memory)
 
 
     return {
@@ -1239,7 +1842,7 @@ def main():
         # -----------------------------
         # 1. Memory commands (save / recall)
         # -----------------------------
-        memory_response = handle_memory_command(user_input, core_memory)
+        memory_response = handle_memory_command(user_input, core_identity)
         if memory_response:
             ai_response = str(memory_response)
 
@@ -1250,34 +1853,6 @@ def main():
         if bias_response:
             ai_response = str(bias_response)
 
-        # -----------------------------
-        # 3. FACTUAL IDENTITY (NO LLM)
-        # -----------------------------
-        factual_identity_triggers = [
-            "who am i",
-            "what do you know about me",
-            "what do you remember about me",
-        ]
-
-        if any(t in lower for t in factual_identity_triggers):
-            facts = core_memory.get("facts", [])
-
-            if not facts:
-                ai_response = "I don't know much about you yet."
-                
-            else:
-                sentences = []
-                for f in facts:
-                    text = f["fact"]
-                    text = (
-                        text.replace("my ", "your ")
-                            .replace("My ", "Your ")
-                            .replace(" I ", " you ")
-                            .replace(" i'm ", " you're ")
-                    )
-                    sentences.append(text)
-
-                ai_response = ", ".join(sentences) + "."
 
         # -----------------------------
         # 4. REFLECTIVE IDENTITY (LLM)
@@ -1290,7 +1865,7 @@ def main():
 
         if any(t in lower for t in reflective_identity_triggers):
             ai_response = clean_ai_output(
-                routellm_think(user_input, working_memory, core_memory)
+                routellm_think(user_input, working_memory, core_identity)
             )
             # prevent fallback LLM call
 
@@ -1326,7 +1901,7 @@ def main():
                 response = reasoning_layer(
                     user_input,
                     working_memory,
-                    core_memory,
+                    core_identity,
                     bias_memory
                 )
                 ai_response = clean_ai_output(response)
@@ -1350,45 +1925,103 @@ def main():
 
         # 6. Passive learning (non-blocking)
         auto_learn(user_input, working_memory)
+        promote_identity_candidates(working_memory)
 
+
+
+from datetime import datetime
 
 def auto_learn(user_input, working_memory):
-    text = user_input.lower()
-
-    if "step by step" in text or "slowly" in text:
-        trait = "prefers step-by-step explanations"
-    elif "short answer" in text:
-        trait = "prefers concise answers"
-    else:
-        return
-
-    observations = working_memory.get("observations", [])
-
     now = datetime.now().isoformat(timespec="seconds")
 
+    # -----------------------------
+    # CONFIDENCE DECAY (PASSIVE)
+    # -----------------------------
+    observations = working_memory.get("observations", [])
+    updated = []
+
+    now_dt = datetime.fromisoformat(now)
+
     for o in observations:
-        if o["trait"] == trait:
-            # Backward compatibility for legacy observations
-           o["count"] = o.get("count", 1)
-           o["first_seen"] = o.get("first_seen", now)
+        last_seen = o.get("last_seen")
+        if not last_seen:
+            updated.append(o)
+            continue
 
-           o["count"] += 1
-           o["last_seen"] = now
-           o["confidence"] = min(o.get("confidence", 0.6) + 0.05, 0.75)
-           break
+        last_dt = datetime.fromisoformat(last_seen)
+        days_idle = (now_dt - last_dt).days
 
-    else:
-        observations.append({
-         "trait": trait,
-         "confidence": 0.6,
-         "count": 1,
-         "first_seen": datetime.now().isoformat(timespec="seconds"),
-         "last_seen": datetime.now().isoformat(timespec="seconds")
-    })
+        if days_idle > 0:
+            decay = days_idle * CONFIDENCE_DECAY_PER_DAY
+            o["confidence"] = max(
+                o.get("confidence", 0.6) - decay,
+                0.0
+            )
 
-    working_memory["observations"] = observations
+        # -----------------------------
+        # SOFT DELETE (INACTIVATE)
+        # -----------------------------
+        inactive_days = (now_dt - last_dt).days
 
-    with open("memory/working_memory.json", "w") as f:
-        json.dump(working_memory, f, indent=2)
-if __name__ == "__main__" and not os.getenv("STREAMLIT_SERVER_RUNNING"):
-    main()
+        if o.get("confidence", 0) < CONFIDENCE_MIN_THRESHOLD:
+            o["active"] = False
+            o["inactive_since"] = now
+        elif inactive_days >= SOFT_DELETE_AFTER_DAYS:
+            o["active"] = False
+            o["inactive_since"] = now
+        else:
+            o["active"] = True
+            o.pop("inactive_since", None)
+
+        updated.append(o)
+
+
+    working_memory["observations"] = updated
+
+
+    # -----------------------------
+    # IDENTITY CANDIDATE DETECTION
+    # -----------------------------
+    intent = extract_intent(user_input) 
+    if intent.get("intent") in ("add_symbol_belief", "add_diary_entry"):
+        return
+    if intent.get("intent") == "add_core_identity" and intent.get("attribute") not in ("likes", "dislikes", "preference"):
+        obs = {
+            "type": "identity_candidate",
+            "entity": intent["entity"],
+            "attribute": intent["attribute"],
+            "value": intent["value"].strip().lower(),
+            "count": 1,
+            "first_seen": now,
+            "last_seen": now,
+            "confidence": 0.6
+        }
+
+        observations = working_memory.get("observations", [])
+
+        for o in observations:
+            if (
+                o.get("type") == "identity_candidate"
+                and o["entity"] == obs["entity"]
+                and o["attribute"] == obs["attribute"]
+                and o["value"] == obs["value"]
+            ):
+                # Repetition → increment count
+                o["count"] += 1
+
+                # Reinforce confidence
+                o["confidence"] = min(o["confidence"] + 0.15, 1.0)
+  
+                o["last_seen"] = now
+                break
+
+
+        else:
+            observations.append(obs)
+
+        working_memory["observations"] = observations
+
+        with open("memory/working_memory.json", "w") as f:
+            json.dump(working_memory, f, indent=2)
+
+        return  # do NOT fall through
