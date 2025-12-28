@@ -20,8 +20,9 @@ PENDING_IDENTITY_CONFIRMATION = None
 
 
 from memory.memory_authority import apply_memory_action, query_fact
-
-
+from memory.memory_manager import promote_to_preferences
+from file_processor import process_file, format_file_for_llm
+import streamlit as st
 os.makedirs("memory", exist_ok=True)
 
 PERSON_ENTITIES = {
@@ -1324,6 +1325,17 @@ def process_user_input(user_input: str) -> dict:
     ai_response = None
     model_response = None
 
+    # --- FILE HANDLING ---
+    if hasattr(st.session_state, 'last_uploaded_file') and st.session_state.last_uploaded_file:
+        file_data = st.session_state.last_uploaded_file
+        processed = process_file(file_data)
+        
+        # Format the input with file content
+        user_input = format_file_for_llm(processed, user_input)
+        
+        # Clear the file from session state
+        st.session_state.last_uploaded_file = None
+
 
     lower = user_input.lower().strip()
     
@@ -1771,7 +1783,7 @@ def process_user_input(user_input: str) -> dict:
 
     # --- Final promotion pass ---
     promote_identity_candidates(working_memory)
-
+    promote_to_preferences(working_memory, core_identity)
 
     return {
         "response": ai_response,
@@ -1926,8 +1938,7 @@ def main():
         # 6. Passive learning (non-blocking)
         auto_learn(user_input, working_memory)
         promote_identity_candidates(working_memory)
-
-
+        promote_to_preferences(working_memory, core_identity)  # ✅ ADD THIS LINE
 
 from datetime import datetime
 
@@ -1985,7 +1996,7 @@ def auto_learn(user_input, working_memory):
     intent = extract_intent(user_input) 
     if intent.get("intent") in ("add_symbol_belief", "add_diary_entry"):
         return
-    if intent.get("intent") == "add_core_identity" and intent.get("attribute") not in ("likes", "dislikes", "preference"):
+    if intent.get("intent") == "add_core_identity":
         obs = {
             "type": "identity_candidate",
             "entity": intent["entity"],
