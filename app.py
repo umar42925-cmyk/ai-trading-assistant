@@ -233,6 +233,9 @@ if "input_key" not in st.session_state:
 if "thinking" not in st.session_state:
     st.session_state.thinking = False
 
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+
 # --------------------------------------------------
 # Sidebar
 # --------------------------------------------------
@@ -416,7 +419,8 @@ if st.session_state.thinking:
         # Get last user message
         last_msg = [msg for speaker, msg in st.session_state.chat if speaker == "You"][-1]
         
-        result = process_user_input(last_msg)
+        # Pass conversation history to process_user_input
+        result = process_user_input(last_msg, st.session_state.conversation_history)
         
         if not isinstance(result, dict):
             raise ValueError("Invalid response format")
@@ -429,6 +433,14 @@ if st.session_state.thinking:
         ai_text = f"⚠️ Internal error: {str(e)}"
         status = "Offline"
         mode = st.session_state.mode
+    
+    # Update conversation history
+    st.session_state.conversation_history.append({"role": "user", "content": last_msg})
+    st.session_state.conversation_history.append({"role": "assistant", "content": ai_text})
+    
+    # Keep only last 20 messages (10 exchanges)
+    if len(st.session_state.conversation_history) > 20:
+        st.session_state.conversation_history = st.session_state.conversation_history[-20:]
     
     # Update session state
     st.session_state.status = status

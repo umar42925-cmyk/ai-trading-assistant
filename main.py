@@ -89,7 +89,6 @@ from symbol_intelligence import resolve_instrument
 # ==============================
 
 
-console = None
 
 FYERS_CLIENT_ID = os.getenv("FYERS_CLIENT_ID")
 FYERS_ACCESS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
@@ -415,7 +414,7 @@ client = OpenAI(
     base_url="https://routellm.abacus.ai/v1"  # ⬅️ BASE ONLY
 )
 
-def routellm_think(user_input, working_memory, core_identity):
+def routellm_think(user_input, working_memory, core_identity, conversation_history=None):
     messages = [
         {"role": "system", "content": AGENT_CONSTITUTION.strip()},
         {"role": "system", "content": MEMORY_POLICY.strip()},
@@ -428,20 +427,72 @@ def routellm_think(user_input, working_memory, core_identity):
             "role": "system",
             "content": "Core facts:\n"
             + json.dumps(core_identity.get("facts", []), indent=2)
-        },
-        {"role": "user", "content": user_input},
+        }
     ]
+    
+    # Add conversation history
+    if conversation_history:
+        messages.extend(conversation_history)
+    
+    # Add current user message
+    messages.append({"role": "user", "content": user_input})
+    
     try:
         resp = client.chat.completions.create(
-        model="route-llm",
-        messages=messages,
-        temperature=0.6,
-    )
+            model="route-llm",
+            messages=messages,
+            temperature=0.6,
+        )
         return resp.choices[0].message.content
-
     except Exception:
-       return "I’m having trouble reasoning right now. Please try again in a moment."
+        return "I'm having trouble reasoning right now. Please try again in a moment."
 
+
+def routellm_think_with_image(user_input, working_memory, core_identity, image_data=None):
+    """
+    Enhanced version that supports image input
+    """
+    messages = [
+        {"role": "system", "content": AGENT_CONSTITUTION.strip()},
+        {"role": "system", "content": MEMORY_POLICY.strip()},
+        {
+            "role": "system",
+            "content": "Personal observations:\n"
+            + json.dumps(working_memory.get("observations") or [], indent=2)
+        },
+        {
+            "role": "system",
+            "content": "Core facts:\n"
+            + json.dumps(core_identity.get("facts", []), indent=2)
+        }
+    ]
+    
+    # Add user message with or without image
+    if image_data:
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_input},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{image_data['mime_type']};base64,{image_data['base64']}"
+                    }
+                }
+            ]
+        })
+    else:
+        messages.append({"role": "user", "content": user_input})
+    
+    try:
+        resp = client.chat.completions.create(
+            model="route-llm",
+            messages=messages,
+            temperature=0.6,
+        )
+        return resp.choices[0].message.content
+    except Exception:
+        return "I'm having trouble reasoning right now. Please try again in a moment."
 
 
 
@@ -708,36 +759,7 @@ def check_fyers():
     except Exception as e:
         return False
 
-
-
-def show_preferences(working_memory):
-    observations = working_memory.get("observations", [])
-
-    if not observations:
-        ai_response = "I haven’t learned your preferences yet."
-        console.print(
-            Panel(
-                Markdown(ai_response),
-                title="🤖 AI",
-                border_style="green"
-            )
-        )
-        console.print(Rule(style="dim"))
-        return
-
-    ai_response = "Here’s what I’ve noticed about you:"
-    console.print(
-        Panel(
-            Markdown(ai_response),
-            title="🤖 AI",
-            border_style="green"
-        )
-    )
-    console.print(Rule(style="dim"))
-    for o in observations:
-        trait = o.get("trait")
-        confidence = o.get("confidence", 0)
-        print(f"• You {trait} (confidence: {confidence:.2f})")  
+ 
 
 def get_latest_identity_audit(entity: str, attribute: str):
     path = "memory/promotion_audit.json"
@@ -1126,130 +1148,6 @@ def requires_live_price(text: str) -> bool:
     return any(re.search(p, t) for p in triggers)
 
 
-def render_header(console, mode, memory_on, brain, status):
-    header_text = Text()
-
-    header_text.append(" AI Trading Assistant ", style="bold green")
-    header_text.append("│ ", style="dim")
-    header_text.append(f"Mode: {mode} ", style="cyan")
-    header_text.append("│ ", style="dim")
-    header_text.append(f"Memory: {'ON' if memory_on else 'OFF'} ", style="magenta")
-    header_text.append("│ ", style="dim")
-    header_text.append(f"Brain: {brain} ", style="yellow")
-    header_text.append("│ ", style="dim")
-
-    status_style = "green" if status == "Online" else "yellow"
-    header_text.append(f"Status: {status}", style=status_style)
-
-    console.print(
-        Panel(
-            Align.left(header_text),
-            border_style="green",
-            padding=(0, 1)
-        )
-    )
-
-def render_user_message(console, text):
-    console.print()
-    console.print(
-        Panel(
-            text,
-            title="👤 You",
-            border_style="cyan",
-            padding=(0, 1)
-        )
-    )
-
-def render_ai_message(console, text):
-    if not text or not text.strip():
-        text = "…"
-
-    console.print(
-        Panel(
-            Markdown(text),
-            title="🤖 AI",
-            border_style="green",
-            padding=(0, 1)
-        )
-    )
-    console.print(Rule(style="dim"))
-
-def handle_slash_command(command, console):
-    global CURRENT_MODE
-
-    cmd = command.strip().lower()
-
-    # --- HELP ---
-    if cmd == "/help":
-        return (
-            "**Available commands:**\n\n"
-            "• `/help` — Show this help\n"
-            "• `/clear` — Clear the screen\n"
-            "• `/status` — Show system status\n"
-            "• `/mode` — Show current mode\n"
-            "• `/mode chat` — Switch to chat mode\n"
-            "• `/mode trading` — Switch to trading mode\n"
-            "• `/exit` — Quit the app"
-        )
-
-    # --- CLEAR ---
-    if cmd == "/clear":
-       try:
-        console.clear()
-       except Exception:
-        pass
-
-        render_header(
-            console=console,
-            mode=CURRENT_MODE.capitalize(),
-            memory_on=True,
-            brain="RouteLLM",
-            status="Online"
-        )
-        return None  # nothing to render as AI message
-
-    # --- STATUS ---
-    if cmd == "/status":
-        return (
-            f"**Status:** Online\n"
-            f"**Mode:** {CURRENT_MODE.capitalize()}\n"
-            f"**Memory:** ON\n"
-            f"**Brain:** RouteLLM"
-        )
-
-    # --- MODE QUERY ---
-    if cmd == "/mode":
-        return f"Current mode is **{CURRENT_MODE.capitalize()}**."
-
-    # --- MODE SWITCH ---
-    if cmd.startswith("/mode "):
-        new_mode = cmd.replace("/mode ", "").strip()
-
-        if new_mode not in ("chat", "trading"):
-            return "Invalid mode. Use `/mode chat` or `/mode trading`."
-
-        if new_mode == CURRENT_MODE:
-            return f"Already in **{CURRENT_MODE.capitalize()}** mode."
-
-        CURRENT_MODE = new_mode
-        return f"Switched to **{CURRENT_MODE.capitalize()}** mode."
-
-    return None  # not a slash command
-
-def render_error_banner(console, message, level="warning"):
-    style_map = {
-        "warning": "yellow",
-        "error": "red"
-    }
-
-    console.print(
-        Panel(
-            message,
-            title="⚠ System",
-            border_style=style_map.get(level, "yellow"),
-            padding=(0, 1)
-        )
-    )
 
     # INVARIANT:
 # - LLM may interpret intent
@@ -1317,13 +1215,17 @@ def handle_identity_confirmation():
 
 
 
-def process_user_input(user_input: str) -> dict:
-
+def process_user_input(user_input: str, conversation_history: list = None) -> dict:
     global PENDING_IDENTITY_CONFIRMATION
     global CURRENT_MODE, UI_STATUS
 
+    if conversation_history is None:
+        conversation_history = []
+
     ai_response = None
     model_response = None
+    image_data = None
+
 
     # --- FILE HANDLING ---
     if hasattr(st.session_state, 'last_uploaded_file') and st.session_state.last_uploaded_file:
@@ -1331,7 +1233,7 @@ def process_user_input(user_input: str) -> dict:
         processed = process_file(file_data)
         
         # Format the input with file content
-        user_input = format_file_for_llm(processed, user_input)
+        user_input, image_data = format_file_for_llm(processed, user_input)
         
         # Clear the file from session state
         st.session_state.last_uploaded_file = None
@@ -1428,12 +1330,7 @@ def process_user_input(user_input: str) -> dict:
 
     # --- Slash commands (reuse existing handler) ---
     if lower.startswith("/"):
-        result = handle_slash_command(user_input, console=None)
-        return {
-            "response": result,
-            "status": UI_STATUS,
-            "mode": CURRENT_MODE
-        }
+        return {"response": "Command not supported", "status": UI_STATUS, "mode": CURRENT_MODE}
 
     intent = extract_intent(user_input)
 
@@ -1456,7 +1353,7 @@ def process_user_input(user_input: str) -> dict:
     # =========================================================
     
 
-        # -----------------------------------------------------
+    # -----------------------------------------------------
     # PLURALITY GUARD (TEST-FIRST, NO SCHEMA CHANGE)
     # Handles cases like: "Sam is my friend also"
     # -----------------------------------------------------
@@ -1763,11 +1660,11 @@ def process_user_input(user_input: str) -> dict:
 
     # --- Main reasoning (LLM) ---
     try:
-        response = reasoning_layer(
+        response = routellm_think(
             user_input,
             working_memory,
             core_identity,
-            bias_memory
+            conversation_history
         )
         ai_response = clean_ai_output(response)
         UI_STATUS = "Online" if ai_response else "Error"
@@ -1794,153 +1691,6 @@ def process_user_input(user_input: str) -> dict:
 
 def main():
     global CURRENT_MODE, UI_STATUS
-    try:
-     console.clear()
-    except Exception:
-     pass
-
-    render_header(
-        console=console,
-        mode=CURRENT_MODE.capitalize(),
-        memory_on=True,
-        brain="RouteLLM",
-        status=UI_STATUS
-    )
-
-    console.print(
-        Panel.fit(
-            "[bold green]AI Trading Assistant[/bold green]\n"
-            "[dim]Phase 1 • Terminal UI[/dim]",
-            border_style="green"
-        )
-    )
-
-    console.print(
-        "[dim]Type 'exit' to quit • Ask about markets, structure, or analysis[/dim]\n"
-    )
-
-   
-
-    # load persistent memory used by bias commands
-
-    while True:
-        user_input = console.input("[bold cyan]👤 You:[/bold cyan] ").strip()
-        render_user_message(console, user_input)
-        # --- Slash command handling ---
-        if user_input.startswith("/"):
-            render_user_message(console, user_input)
-            result = handle_slash_command(user_input, console)
-            if result:
-                render_ai_message(console, result)
-                continue
-
-
-        lower = user_input.lower()
-        ai_response = None
-        model_response = None
-        symbol = None
-        data = None
-
-
-        # --- Graceful exit ---
-        if user_input.lower() in ("exit", "/exit"):
-          console.print("\n[bold green]👋 Goodbye! Trade safe.[/bold green]")
-          break
-
-        # --- Greeting guard (prevents menu dumping) ---
-        if is_greeting_only(user_input):
-            ai_response = "Hi 👋 What would you like help with today?"
-
-        # -----------------------------
-        # 1. Memory commands (save / recall)
-        # -----------------------------
-        memory_response = handle_memory_command(user_input, core_identity)
-        if memory_response:
-            ai_response = str(memory_response)
-
-        # -----------------------------
-        # 2. Bias / preference commands
-        # -----------------------------
-        bias_response = handle_bias_command(user_input, bias_memory)
-        if bias_response:
-            ai_response = str(bias_response)
-
-
-        # -----------------------------
-        # 4. REFLECTIVE IDENTITY (LLM)
-        # -----------------------------
-        reflective_identity_triggers = [
-            "analyze me",
-            "describe my personality",
-            "help me understand myself",
-        ]
-
-        if any(t in lower for t in reflective_identity_triggers):
-            ai_response = clean_ai_output(
-                routellm_think(user_input, working_memory, core_identity)
-            )
-            # prevent fallback LLM call
-
-        # -----------------------------
-        # 5. Mode detection
-        # -----------------------------
-        new_mode = detect_mode(user_input)
-        if new_mode != CURRENT_MODE:
-            CURRENT_MODE = new_mode
-
-        # --- Live market data hook ---
-        if requires_live_price(user_input):
-            symbol = resolve_symbol(user_input)
-            if not symbol:
-                ai_response = "I couldn’t identify the instrument."
-            elif not market_data:
-                ai_response = "Live data isn’t available right now."
-            else:
-                data = market_data.fetch_live_quote(symbol)
-                if not data or "error" in data:
-                    ai_response = "I couldn’t fetch live prices at the moment."
-                else:
-                    price = data.get("price")
-                    ch = data.get("change")
-                    chp = data.get("change_pct")
-                    ai_response = f"{symbol} is trading at {price} ({ch:+.2f}, {chp:+.2f}%)."
-
-        # -----------------------------
-        # FINAL RESPONSE EMISSION (SINGLE OWNER)
-        # -----------------------------
-        if not ai_response:
-            with console.status("[bold yellow]🤔 Thinking...[/bold yellow]"):
-                response = reasoning_layer(
-                    user_input,
-                    working_memory,
-                    core_identity,
-                    bias_memory
-                )
-                ai_response = clean_ai_output(response)
-                model_response = ai_response
-        else:
-             model_response = ai_response
-        if not ai_response:
-            UI_STATUS = "Error"
-            render_error_banner(
-                console,
-                "LLM error. Please try again."
-            )
-            continue
-        UI_STATUS = "Online"
-
-        render_ai_message(console, ai_response)
-
-
-        if CURRENT_MODE == "trading" and model_response:
-            auto_journal_trading(user_input, model_response)
-
-        # 6. Passive learning (non-blocking)
-        auto_learn(user_input, working_memory)
-        promote_identity_candidates(working_memory)
-        promote_to_preferences(working_memory, core_identity)  # ✅ ADD THIS LINE
-
-from datetime import datetime
 
 def auto_learn(user_input, working_memory):
     now = datetime.now().isoformat(timespec="seconds")

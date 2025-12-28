@@ -120,19 +120,30 @@ def process_file(file_data: dict) -> dict:
     }
 
 
-def format_file_for_llm(processed_file: dict, user_message: str = "") -> str:
+def format_file_for_llm(processed_file: dict, user_message: str = "") -> tuple:
     """
     Format processed file content for LLM input.
+    Returns: (text_message, image_data_dict or None)
     """
     file_type = processed_file.get("type")
     filename = processed_file.get("filename")
     content = processed_file.get("content")
+    mime_type = processed_file.get("mime_type")
     
     if file_type == "image":
-        return f"{user_message}\n\n[User uploaded image: {filename}]\nNote: Image processing not yet implemented."
+        # Return both text and image data
+        text = f"{user_message}\n\n[User uploaded image: {filename}]" if user_message else f"[Image: {filename}]"
+        image_data = {
+            "type": "image",
+            "base64": content,
+            "mime_type": mime_type
+        }
+        return (text, image_data)
     
     elif file_type in ["text", "pdf"]:
-        return f"{user_message}\n\n--- File Content: {filename} ---\n{content}\n--- End of File ---"
+        text = f"{user_message}\n\n--- File Content: {filename} ---\n{content}\n--- End of File ---" if user_message else f"--- File Content: {filename} ---\n{content}\n--- End of File ---"
+        return (text, None)
     
     else:
-        return f"{user_message}\n\n{content}"
+        text = f"{user_message}\n\n{content}" if user_message else content
+        return (text, None)
