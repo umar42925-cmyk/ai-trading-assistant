@@ -7,3 +7,9 @@ rich
 routellm
 openai
 abacusai
+
+# New dependencies for enhanced memory
+chromadb
+sentence-transformers
+sqlite3
+numpy

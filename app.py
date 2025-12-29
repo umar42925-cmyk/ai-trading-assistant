@@ -1,7 +1,34 @@
 import streamlit as st
-from main import process_user_input, working_memory
 import json
 from datetime import datetime
+import sqlite3
+import sys
+import os
+
+# --------------------------------------------------
+# FIXED IMPORTS - Add current directory to path first
+# --------------------------------------------------
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
+
+# Now import from main.py
+try:
+    from main import process_user_input
+    from main import working_memory
+    IMPORT_SUCCESS = True
+except ImportError as e:
+    print(f"⚠️ Import warning: {e}")
+    IMPORT_SUCCESS = False
+    
+    # Create fallback functions if import fails
+    def process_user_input(user_input, conversation_history=None):
+        return {
+            "response": "System initializing... Please run main.py directly.",
+            "status": "Offline", 
+            "mode": "personal"
+        }
+    
+    working_memory = {"observations": []}
 
 # --------------------------------------------------
 # Page config (MUST be first Streamlit call)
@@ -12,6 +39,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Show import status in sidebar for debugging
+if not IMPORT_SUCCESS:
+    st.sidebar.warning("⚠️ Could not import main module fully")
 
 # --------------------------------------------------
 # Custom CSS for better UI
@@ -271,6 +302,109 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # --------------------------------------------------
+    # ENHANCED INTELLIGENCE SECTION - MOVED INSIDE SIDEBAR
+    # --------------------------------------------------
+    st.markdown("### 🧠 Enhanced Intelligence")
+    
+    # Personality Insights - Only if available
+    if st.button("Show Personality Insights", use_container_width=True):
+        try:
+            # Check if enhanced memory is available in main.py
+            from main import ENHANCED_MEMORY_AVAILABLE, personality_engine
+            if ENHANCED_MEMORY_AVAILABLE and personality_engine:
+                summary = personality_engine.get_personality_summary()
+                with st.expander("Personality Profile", expanded=True):
+                    st.json(summary)
+            else:
+                st.info("Personality engine not available. Check main.py imports.")
+        except Exception as e:
+            st.info(f"Personality engine not available: {str(e)[:50]}...")
+    
+    # Pattern Analysis
+    if st.button("Show Behavior Patterns", use_container_width=True):
+        try:
+            from main import ENHANCED_MEMORY_AVAILABLE, pattern_recognizer
+            if ENHANCED_MEMORY_AVAILABLE and pattern_recognizer:
+                patterns = pattern_recognizer.get_pattern_summary()
+                with st.expander("Behavior Patterns", expanded=True):
+                    st.json(patterns)
+            else:
+                st.info("Pattern recognizer not available.")
+        except Exception as e:
+            st.info(f"Pattern recognizer not available: {str(e)[:50]}...")
+    
+    # Goal Tracking
+    if st.button("Manage Goals", use_container_width=True):
+        try:
+            from main import ENHANCED_MEMORY_AVAILABLE, vector_memory
+            if ENHANCED_MEMORY_AVAILABLE and vector_memory:
+                conn = sqlite3.connect(vector_memory.db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM goals WHERE current_status = 'active'")
+                goals = cursor.fetchall()
+                conn.close()
+                
+                with st.expander("Active Goals", expanded=True):
+                    if goals:
+                        for goal in goals:
+                            progress = goal[5] if len(goal) > 5 else 0
+                            st.write(f"**{goal[1]}**")
+                            st.write(f"Description: {goal[2]}")
+                            if goal[3]:
+                                st.write(f"Target: {goal[3]}")
+                            st.progress(progress)
+                            st.write(f"Progress: {progress*100:.1f}%")
+                            st.markdown("---")
+                    else:
+                        st.info("No active goals. Add one below!")
+                    
+                    # Add new goal form
+                    with st.form("add_goal_form"):
+                        goal_type = st.selectbox("Goal Type", ["Personal", "Health", "Career", "Learning", "Financial"])
+                        description = st.text_input("Description")
+                        target_date = st.date_input("Target Date (optional)")
+                        
+                        if st.form_submit_button("Add Goal"):
+                            try:
+                                vector_memory.add_goal(
+                                    goal_type=goal_type,
+                                    description=description,
+                                    target_date=target_date.isoformat() if target_date else None
+                                )
+                                st.success("Goal added!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to add goal: {str(e)[:50]}...")
+            else:
+                st.info("Goal tracking not available.")
+        except Exception as e:
+            st.info(f"Goal tracking not available: {str(e)[:50]}...")
+    
+    # Mood Tracking
+    if st.button("Log Current Mood", use_container_width=True):
+        with st.expander("Mood Logger", expanded=True):
+            with st.form("mood_form"):
+                mood_score = st.slider("Mood (1-10)", 1, 10, 5)
+                energy_level = st.slider("Energy Level (1-10)", 1, 10, 5)
+                emotion = st.selectbox("Dominant Emotion", 
+                                     ["neutral", "happy", "sad", "angry", "excited", "calm", "anxious", "tired", "energetic"])
+                context = st.text_input("Context (optional)", placeholder="e.g., 'after work', 'morning', 'before trading'")
+                notes = st.text_area("Notes (optional)")
+                
+                if st.form_submit_button("Log Mood"):
+                    try:
+                        from main import ENHANCED_MEMORY_AVAILABLE, vector_memory
+                        if ENHANCED_MEMORY_AVAILABLE and vector_memory:
+                            vector_memory.log_mood(mood_score, energy_level, emotion, context, notes)
+                            st.success("Mood logged successfully!")
+                        else:
+                            st.error("Vector memory not available.")
+                    except Exception as e:
+                        st.error(f"Failed to log mood: {str(e)[:50]}...")
+    
+    st.markdown("---")
+    
     # Working memory status
     st.markdown("### 🔄 Working Memory")
     try:
@@ -281,6 +415,17 @@ with st.sidebar:
             st.caption("Learning from your patterns...")
     except Exception:
         pass
+    
+    st.markdown("---")
+    
+    # File uploader in sidebar
+    st.markdown("### 📎 Upload File")
+    uploaded_file = st.file_uploader(
+        "Choose a file",
+        key=f"file_{st.session_state.input_key}",
+        help="Upload images, PDFs, documents, code files",
+        label_visibility="collapsed"
+    )
     
     st.markdown("---")
     
@@ -365,53 +510,28 @@ if st.session_state.thinking:
 input_container = st.container()
 
 with input_container:
-    with st.form(key="chat_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns([7, 0.5, 1])
-        
-        with col1:
-            user_input = st.text_input(
-                "Message",
-                placeholder="Type your message here... (Press Enter to send)",
-                label_visibility="collapsed",
-                key=f"user_input_{st.session_state.input_key}"
-            )
-        
-        with col2:
-            uploaded_file = st.file_uploader("📎", label_visibility="collapsed", key=f"file_{st.session_state.input_key}")
-        
-        with col3:
-            send_button = st.form_submit_button("Send", use_container_width=True)
-
+    # Chat input (stays fixed at bottom automatically)
+    user_input = st.chat_input("Type your message here...")
+    
 # --------------------------------------------------
 # Handle submission
 # --------------------------------------------------
-if send_button:
-    if user_input:
-        # Add user message immediately
-        st.session_state.chat.append(("You", user_input))
-        st.session_state.thinking = True
-        
-        # Store uploaded file in session state
-        if uploaded_file is not None:
-            st.session_state.last_uploaded_file = {
-                "name": uploaded_file.name,
-                "type": uploaded_file.type,
-                "data": uploaded_file.getvalue()
-            }
-        else:
-            st.session_state.last_uploaded_file = None
-        
-        st.rerun()
-    elif uploaded_file is not None:
-        # File only, no text
-        st.session_state.chat.append(("You", f"[Uploaded: {uploaded_file.name}]"))
-        st.session_state.thinking = True
+if user_input:
+    # Add user message immediately
+    st.session_state.chat.append(("You", user_input))
+    st.session_state.thinking = True
+    
+    # Store uploaded file in session state
+    if uploaded_file is not None:
         st.session_state.last_uploaded_file = {
             "name": uploaded_file.name,
             "type": uploaded_file.type,
             "data": uploaded_file.getvalue()
         }
-        st.rerun()
+    else:
+        st.session_state.last_uploaded_file = None
+    
+    st.rerun()
 
 # Process if thinking
 if st.session_state.thinking:
@@ -430,9 +550,10 @@ if st.session_state.thinking:
         mode = result.get("mode", st.session_state.mode)
         
     except Exception as e:
-        ai_text = f"⚠️ Internal error: {str(e)}"
+        ai_text = f"⚠️ Internal error: {str(e)[:100]}"
         status = "Offline"
         mode = st.session_state.mode
+        print(f"Error in app.py processing: {e}")
     
     # Update conversation history
     st.session_state.conversation_history.append({"role": "user", "content": last_msg})
