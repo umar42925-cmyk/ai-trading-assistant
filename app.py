@@ -30,6 +30,16 @@ except ImportError as e:
     
     working_memory = {"observations": []}
 
+# Import Upstox auth
+try:
+    from financial.auth.upstox_auth import upstox_auth_flow, check_upstox_auth, UpstoxAuth
+    UPSTOX_AVAILABLE = True
+except ImportError:
+    UPSTOX_AVAILABLE = False
+    upstox_auth_flow = None
+    check_upstox_auth = lambda: False
+    UpstoxAuth = None
+
 # --------------------------------------------------
 # Page config (MUST be first Streamlit call)
 # --------------------------------------------------
@@ -267,6 +277,22 @@ if "thinking" not in st.session_state:
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
+if "show_upstox_auth" not in st.session_state:
+    st.session_state.show_upstox_auth = False
+
+# --------------------------------------------------
+# Handle Upstox authentication page
+# --------------------------------------------------
+if st.session_state.get('show_upstox_auth', False):
+    if upstox_auth_flow:
+        upstox_auth_flow()
+    
+    if st.button("← Back to Chat"):
+        st.session_state.show_upstox_auth = False
+        st.rerun()
+    
+    st.stop()  # Don't show chat interface while authenticating
+
 # --------------------------------------------------
 # Sidebar
 # --------------------------------------------------
@@ -289,9 +315,33 @@ with st.sidebar:
     # Mode indicator
     st.markdown(f"""
         <div class="mode-badge">
-            📍 {st.session_state.mode.capitalize()} Mode
+            🔍 {st.session_state.mode.capitalize()} Mode
         </div>
     """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    
+    # ========================================
+    # UPSTOX AUTHENTICATION SECTION
+    # ========================================
+    st.markdown("### 🔐 Market Data Access")
+    
+    if UPSTOX_AVAILABLE:
+        if check_upstox_auth():
+            st.success("✅ Upstox Connected")
+            
+            if st.button("🚪 Logout Upstox", use_container_width=True):
+                auth = UpstoxAuth()
+                auth.logout()
+                st.rerun()
+        else:
+            st.warning("⚠️ Not Authenticated")
+            if st.button("🔐 Authenticate Upstox", type="primary", use_container_width=True):
+                st.session_state.show_upstox_auth = True
+                st.rerun()
+    else:
+        st.error("❌ Upstox SDK Missing")
+        st.caption("Run: `pip install upstox-python-sdk`")
     
     st.markdown("---")
     
@@ -303,49 +353,45 @@ with st.sidebar:
     st.markdown("---")
     
     # --------------------------------------------------
-    # ENHANCED INTELLIGENCE SECTION - MOVED INSIDE SIDEBAR
+    # ENHANCED INTELLIGENCE SECTION - AS DROPDOWN
     # --------------------------------------------------
-    st.markdown("### 🧠 Enhanced Intelligence")
-    
-    # Personality Insights - Only if available
-    if st.button("Show Personality Insights", use_container_width=True):
-        try:
-            # Check if enhanced memory is available in main.py
-            from main import ENHANCED_MEMORY_AVAILABLE, personality_engine
-            if ENHANCED_MEMORY_AVAILABLE and personality_engine:
-                summary = personality_engine.get_personality_summary()
-                with st.expander("Personality Profile", expanded=True):
+    with st.expander("🧠 Enhanced Intelligence", expanded=False):
+        
+        # Personality Insights
+        if st.button("Show Personality Insights", use_container_width=True, key="personality_btn"):
+            try:
+                from main import ENHANCED_MEMORY_AVAILABLE, personality_engine
+                if ENHANCED_MEMORY_AVAILABLE and personality_engine:
+                    summary = personality_engine.get_personality_summary()
                     st.json(summary)
-            else:
-                st.info("Personality engine not available. Check main.py imports.")
-        except Exception as e:
-            st.info(f"Personality engine not available: {str(e)[:50]}...")
-    
-    # Pattern Analysis
-    if st.button("Show Behavior Patterns", use_container_width=True):
-        try:
-            from main import ENHANCED_MEMORY_AVAILABLE, pattern_recognizer
-            if ENHANCED_MEMORY_AVAILABLE and pattern_recognizer:
-                patterns = pattern_recognizer.get_pattern_summary()
-                with st.expander("Behavior Patterns", expanded=True):
+                else:
+                    st.info("Personality engine not available.")
+            except Exception as e:
+                st.info(f"Personality engine not available: {str(e)[:50]}...")
+        
+        # Pattern Analysis
+        if st.button("Show Behavior Patterns", use_container_width=True, key="patterns_btn"):
+            try:
+                from main import ENHANCED_MEMORY_AVAILABLE, pattern_recognizer
+                if ENHANCED_MEMORY_AVAILABLE and pattern_recognizer:
+                    patterns = pattern_recognizer.get_pattern_summary()
                     st.json(patterns)
-            else:
-                st.info("Pattern recognizer not available.")
-        except Exception as e:
-            st.info(f"Pattern recognizer not available: {str(e)[:50]}...")
-    
-    # Goal Tracking
-    if st.button("Manage Goals", use_container_width=True):
-        try:
-            from main import ENHANCED_MEMORY_AVAILABLE, vector_memory
-            if ENHANCED_MEMORY_AVAILABLE and vector_memory:
-                conn = sqlite3.connect(vector_memory.db_path)
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM goals WHERE current_status = 'active'")
-                goals = cursor.fetchall()
-                conn.close()
-                
-                with st.expander("Active Goals", expanded=True):
+                else:
+                    st.info("Pattern recognizer not available.")
+            except Exception as e:
+                st.info(f"Pattern recognizer not available: {str(e)[:50]}...")
+        
+        # Goal Tracking
+        if st.button("Manage Goals", use_container_width=True, key="goals_btn"):
+            try:
+                from main import ENHANCED_MEMORY_AVAILABLE, vector_memory
+                if ENHANCED_MEMORY_AVAILABLE and vector_memory:
+                    conn = sqlite3.connect(vector_memory.db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM goals WHERE current_status = 'active'")
+                    goals = cursor.fetchall()
+                    conn.close()
+                    
                     if goals:
                         for goal in goals:
                             progress = goal[5] if len(goal) > 5 else 0
@@ -376,14 +422,13 @@ with st.sidebar:
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Failed to add goal: {str(e)[:50]}...")
-            else:
-                st.info("Goal tracking not available.")
-        except Exception as e:
-            st.info(f"Goal tracking not available: {str(e)[:50]}...")
-    
-    # Mood Tracking
-    if st.button("Log Current Mood", use_container_width=True):
-        with st.expander("Mood Logger", expanded=True):
+                else:
+                    st.info("Goal tracking not available.")
+            except Exception as e:
+                st.info(f"Goal tracking not available: {str(e)[:50]}...")
+        
+        # Mood Tracking
+        if st.button("Log Current Mood", use_container_width=True, key="mood_btn"):
             with st.form("mood_form"):
                 mood_score = st.slider("Mood (1-10)", 1, 10, 5)
                 energy_level = st.slider("Energy Level (1-10)", 1, 10, 5)
@@ -406,7 +451,7 @@ with st.sidebar:
     st.markdown("---")
     
     # Working memory status
-    st.markdown("### 🔄 Working Memory")
+    st.markdown("### 📄 Working Memory")
     try:
         obs_count = len(working_memory.get("observations", []))
         st.markdown(f"**Observations:** {obs_count}")

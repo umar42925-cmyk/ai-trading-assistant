@@ -1,3 +1,17 @@
+# ==============================
+# PERFORMANCE OPTIMIZATION
+# ==============================
+import sys
+import os
+sys.dont_write_bytecode = True  # Skip .pyc generation
+
+# Defer Streamlit check
+if 'STREAMLIT_RUNTIME_EXISTS' not in os.environ:
+    os.environ['STREAMLIT_RUNTIME_EXISTS'] = '1'
+
+# NOW your existing code starts:
+CURRENT_MODE = "personal"  # personal | trading
+UI_STATUS = "Online"  # Online | Rate-limited | Offline
 CURRENT_MODE = "personal"  # personal | trading
 UI_STATUS = "Online"  # Online | Rate-limited | Offline
 
@@ -7,7 +21,21 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 import sqlite3 
-# Add these imports after other imports
+
+# Load environment variables FIRST
+load_dotenv()  # safe: does nothing on Streamlit Cloud
+
+from datetime import datetime, timedelta
+
+# Add near the top with other global variables
+MARKET_PIPELINE_AVAILABLE = False
+market_pipeline = None
+ENHANCED_MEMORY_AVAILABLE = False
+vector_memory = None
+personality_engine = None
+pattern_recognizer = None
+
+# Try to import enhanced memory systems (but don't fail if missing)
 try:
     from memory.vector_memory import VectorMemory
     from memory.personality_engine import PersonalityEngine
@@ -27,24 +55,84 @@ except ImportError as e:
     personality_engine = None
     pattern_recognizer = None
 
+# Try to import market pipeline (but don't fail if missing)
+MARKET_PIPELINE_AVAILABLE = False
+MARKET_TOOLS_AVAILABLE = False
+market_pipeline = None
+financial_tools = None
+UPSTOX_AVAILABLE = False
+
+print("🔍 Loading financial modules...")
+
+# 1. Import MinimalMarketPipeline from financial.data.minimal_pipeline
 try:
     from financial.data.minimal_pipeline import MinimalMarketPipeline
-    market_pipeline = MinimalMarketPipeline()  # No use_cache parameter needed
+    market_pipeline = MinimalMarketPipeline()
     MARKET_PIPELINE_AVAILABLE = True
-    print(f"✅ Market pipeline initialized. Sources: {market_pipeline.sources}")
+    print(f"✅ Market pipeline initialized from financial.data.minimal_pipeline")
+    print(f"   Sources: {market_pipeline.sources if hasattr(market_pipeline, 'sources') else 'unknown'}")
 except ImportError as e:
-    print(f"⚠️ Market pipeline not available: {e}")
+    print(f"⚠️ Market pipeline import failed: {e}")
     MARKET_PIPELINE_AVAILABLE = False
-    market_pipeline = None
-except Exception as e:
-    print(f"⚠️ Market pipeline initialization error: {e}")
-    MARKET_PIPELINE_AVAILABLE = False
-    market_pipeline = None
+    # Create dummy
+    class DummyMarketPipeline:
+        def __init__(self):
+            self.sources = ["dummy"]
+        def fetch_market_data(self, *args, **kwargs):
+            return None
+    market_pipeline = DummyMarketPipeline()
 
-load_dotenv()  # safe: does nothing on Streamlit Cloud
+# 2. Import FinancialTools from financial.financial_tools
+try:
+    from financial.financial_tools import FinancialTools
+    financial_tools = FinancialTools()
+    MARKET_TOOLS_AVAILABLE = True
+    print("✅ Financial tools loaded from financial.financial_tools")
+except ImportError as e:
+    MARKET_TOOLS_AVAILABLE = False
+    financial_tools = None
+    print(f"⚠️ Financial tools import failed: {e}")
 
-from datetime import datetime, timedelta
+# 3. Import Upstox
+try:
+    from financial.auth.upstox_auth import upstox_auth_flow, check_upstox_auth, UpstoxAuth
+    UPSTOX_AVAILABLE = True
+    print("✅ Upstox auth tools loaded")
+except ImportError as e:
+    UPSTOX_AVAILABLE = False
+    upstox_auth_flow = None
+    check_upstox_auth = lambda: False
+    UpstoxAuth = None
+    print(f"⚠️ Upstox auth not available: {e}")
+# Move the old test block to a separate function
+def test_fyers_integration():
+    """Test Fyers integration separately"""
+    print("🔐 Testing Fyers integration...")
+    
+    try:
+        from financial.auth.auth_helper import setup_fyers_auth
+        token = setup_fyers_auth()
+        if token:
+            print(f"✅ Authentication successful")
+            
+            # Test Fyers data fetch
+            if MARKET_PIPELINE_AVAILABLE and market_pipeline:
+                print("📊 Testing Fyers data fetch...")
+                # Check if fetch_fyers method exists
+                if hasattr(market_pipeline, 'fetch_fyers'):
+                    data = market_pipeline.fetch_fyers("NSE:NIFTY50-INDEX")
+                    if data:
+                        print(f"✅ NIFTY data via Fyers: ₹{data.get('latest_price', 0):.2f}")
+                    else:
+                        print("⚠️ Fyers data fetch failed")
+                else:
+                    print("ℹ️ market_pipeline doesn't have fetch_fyers method")
+        else:
+            print("ℹ️ Fyers not authenticated. Using Yahoo Finance for Indian data.")
+    except ImportError as e:
+        print(f"⚠️ Fyers auth import error: {e}")
 
+# Constants moved from original position
 IDENTITY_CONFLICT_WINDOW = timedelta(days=2)
 CONFIDENCE_DECAY_PER_DAY = 0.05
 CONFIDENCE_MIN_THRESHOLD = 0.3
@@ -941,6 +1029,163 @@ def routellm_think_with_image(user_input, working_memory, core_identity, image_d
 # ================================
 # UTILITY FUNCTIONS
 # ================================
+
+def enhanced_get_market_data(symbol, timeframe="1d", source="auto"):
+    """
+    Enhanced market data fetcher that works with your existing code
+    """
+    print(f"🔍 Fetching market data for: {symbol}")
+    
+    # If market pipeline is available, use it
+    if MARKET_PIPELINE_AVAILABLE and market_pipeline:
+        try:
+            data = market_pipeline.fetch_market_data(symbol, source=source)
+            if data and data.get("latest_price"):
+                return {
+                    'symbol': symbol,
+                    'price': float(data.get("latest_price", 0)),
+                    'source': data.get("source", "pipeline"),
+                    'status': 'ok',
+                    'data': data.get("data", []),
+                    'interval': data.get("interval", timeframe)
+                }
+        except Exception as e:
+            print(f"Pipeline fetch failed: {e}")
+            # Fall through to yfinance
+    
+    # Fallback to yfinance (always works)
+    try:
+        import yfinance as yf
+        
+        # Add .NS suffix for Indian stocks if not present
+        if not symbol.endswith(('.NS', '.BO', '^')) and source != "crypto":
+            symbol_to_fetch = f"{symbol}.NS"
+        else:
+            symbol_to_fetch = symbol
+        
+        # Map timeframe
+        period_map = {
+            "1min": "1d", "5min": "5d", "15min": "5d", "30min": "5d",
+            "1h": "5d", "1d": "5d", "1w": "1mo", "1M": "3mo"
+        }
+        
+        interval_map = {
+            "1min": "1m", "5min": "5m", "15min": "15m", "30min": "30m",
+            "1h": "60m", "1d": "1d", "1w": "1wk", "1M": "1mo"
+        }
+        
+        period = period_map.get(timeframe, "5d")
+        interval = interval_map.get(timeframe, "1d")
+        
+        ticker = yf.Ticker(symbol_to_fetch)
+        df = ticker.history(period=period, interval=interval)
+        
+        if df.empty:
+            return {'symbol': symbol, 'price': 0, 'source': 'yfinance', 'status': 'no_data'}
+        
+        latest = df.iloc[-1]
+        
+        return {
+            'symbol': symbol,
+            'price': float(latest.get('Close', 0)),
+            'open': float(latest.get('Open', 0)),
+            'high': float(latest.get('High', 0)),
+            'low': float(latest.get('Low', 0)),
+            'volume': int(latest.get('Volume', 0)),
+            'timestamp': latest.name.isoformat() if hasattr(latest.name, 'isoformat') else str(latest.name),
+            'source': 'yfinance',
+            'status': 'ok',
+            'interval': interval
+        }
+        
+    except Exception as e:
+        print(f"YFinance fetch failed: {e}")
+        return {'symbol': symbol, 'price': 0, 'source': 'error', 'status': f'error: {str(e)[:100]}'}
+
+def detect_market_query(text: str):
+    """Detect if user is asking for market data"""
+    text_lower = text.lower()
+    
+    market_keywords = [
+        'price of', 'price for', 'what is', 'how much is',
+        'stock price', 'share price', 'nifty', 'sensex',
+        'reliance', 'tcs', 'infy', 'hdfc', 'icici',
+        'market', 'trading', 'invest', 'buy', 'sell'
+    ]
+    
+    # Simple symbol detection (you can enhance this)
+    common_symbols = {
+        'nifty': '^NSEI',
+        'banknifty': '^NSEBANK', 
+        'sensex': '^BSESN',
+        'reliance': 'RELIANCE.NS',
+        'tcs': 'TCS.NS',
+        'infosys': 'INFY.NS',
+        'hdfc bank': 'HDFCBANK.NS',
+        'icici bank': 'ICICIBANK.NS'
+    }
+    
+    detected = []
+    
+    # Check for specific symbols
+    for name, symbol in common_symbols.items():
+        if name in text_lower:
+            detected.append({
+                'name': name,
+                'symbol': symbol,
+                'type': 'stock' if '.NS' in symbol else 'index'
+            })
+    
+    # Check for general market queries
+    if any(keyword in text_lower for keyword in market_keywords):
+        if not detected:  # General market query without specific symbol
+            detected.append({
+                'name': 'market',
+                'symbol': '^NSEI',  # Default to Nifty
+                'type': 'index'
+            })
+    
+    return detected if detected else None
+
+def handle_market_query(user_input, market_queries, current_mode):
+    """Handle market data queries"""
+    # Check if financial_tools is available
+    if not MARKET_TOOLS_AVAILABLE or financial_tools is None:
+        return {
+            "response": "Financial analysis tools are not available right now.",
+            "status": UI_STATUS,
+            "mode": current_mode
+        }
+    
+    responses = []
+    
+    for query in market_queries:
+        symbol = query['symbol']
+        
+        # Get market data
+        data = enhanced_get_market_data(symbol)
+        
+        if data.get('status') == 'ok':
+            # Format the response
+            try:
+                insight = financial_tools.format_market_insight(query['name'].upper(), data)
+                analysis = financial_tools.analyze_stock_for_agent(symbol)
+                response = f"{insight}\n\n{analysis}"
+            except Exception as e:
+                response = f"📊 {query['name'].upper()}: ₹{data.get('price', 0):.2f} (Basic price data)"
+        else:
+            response = f"⚠️ Could not fetch data for {query['name']}"
+        
+        responses.append(response)
+    
+    # Combine all responses
+    final_response = "\n\n".join(responses)
+    
+    return {
+        "response": final_response,
+        "status": UI_STATUS,
+        "mode": current_mode
+    }
 
 def check_goal_progress(user_input: str, vector_memory):
     """Check if user mentions goal progress"""
@@ -1938,6 +2183,13 @@ def process_user_input(user_input: str, conversation_history: list = None) -> di
     if new_mode != CURRENT_MODE:
         CURRENT_MODE = new_mode
     
+     # --- ENHANCED: MARKET DATA QUERY DETECTION ---
+    market_queries = detect_market_query(user_input)
+    
+    if market_queries:
+        # Handle market data queries
+        return handle_market_query(user_input, market_queries, CURRENT_MODE)
+    
     # --- Live market data ---
     if requires_live_price(user_input):
         response = None
@@ -2169,17 +2421,43 @@ def main():
     st.set_page_config(page_title="AI Agent", layout="wide")
     
     st.title("🤖 AI Agent")
-    st.caption(f"Mode: {CURRENT_MODE} | Status: {UI_STATUS}")
     
     # Initialize session state
     if 'conversation' not in st.session_state:
         st.session_state.conversation = []
     if 'uploaded_file' not in st.session_state:
         st.session_state.uploaded_file = None
+    if 'show_upstox_auth' not in st.session_state:
+        st.session_state.show_upstox_auth = False
     
-    # Sidebar
+    # Sidebar with Upstox authentication
     with st.sidebar:
+        st.header("🔐 Upstox Authentication")
+        
+        if UPSTOX_AVAILABLE:
+            if check_upstox_auth():
+                st.success("✅ Upstox: Authenticated")
+                if st.button("Logout from Upstox"):
+                    from financial.auth.upstox_auth import UpstoxAuth
+                    auth = UpstoxAuth()
+                    auth.logout()
+                    st.rerun()
+            else:
+                if st.button("Authenticate Upstox", type="primary"):
+                    # Show auth flow in main area
+                    st.session_state.show_upstox_auth = True
+                    st.rerun()
+        else:
+            st.warning("Upstox not available")
+            if st.button("Install Upstox"):
+                st.code("pip install upstox-python")
+        
+        st.divider()
         st.header("Memory")
+        
+        # Simple mode selector
+        mode = st.radio("Mode:", ["personal", "trading"])
+        CURRENT_MODE = mode
         
         if st.button("Clear Conversation"):
             st.session_state.conversation = []
@@ -2190,6 +2468,28 @@ def main():
         if uploaded_file:
             st.session_state.uploaded_file = uploaded_file
             st.success(f"Uploaded: {uploaded_file.name}")
+    
+    # Main area - show Upstox auth if requested
+    if UPSTOX_AVAILABLE and st.session_state.get('show_upstox_auth', False):
+        st.header("Upstox Authentication")
+        
+        # Try to show auth flow
+        try:
+            if upstox_auth_flow:
+                upstox_auth_flow()
+            else:
+                st.error("Upstox auth flow not available")
+        except Exception as e:
+            st.error(f"Error in auth flow: {e}")
+        
+        if st.button("← Back to Chat"):
+            st.session_state.show_upstox_auth = False
+            st.rerun()
+        
+        return  # Don't show chat when authenticating
+    
+    # Normal chat interface
+    st.caption(f"Mode: {CURRENT_MODE} | Status: {UI_STATUS}")
     
     # Main chat interface
     for msg in st.session_state.conversation:
@@ -2203,17 +2503,23 @@ def main():
         
         # Process input
         with st.spinner("Thinking..."):
-            result = process_user_input(prompt, st.session_state.conversation)
+            try:
+                result = process_user_input(prompt, st.session_state.conversation)
+                ai_response = result["response"]
+            except Exception as e:
+                ai_response = f"Error: {str(e)}"
             
             # Add AI response to conversation
-            st.session_state.conversation.append({"role": "assistant", "content": result["response"]})
+            st.session_state.conversation.append({"role": "assistant", "content": ai_response})
             
             # Update status
-            UI_STATUS = result["status"]
-            CURRENT_MODE = result["mode"]
+            if "status" in result:
+                UI_STATUS = result["status"]
+            if "mode" in result:
+                CURRENT_MODE = result["mode"]
         
         st.rerun()
-
+        
 def mood_auto_detection(user_input: str, vector_memory):
     """Automatically detect and log mood from user input"""
     if not vector_memory:
@@ -2265,4 +2571,7 @@ def mood_auto_detection(user_input: str, vector_memory):
 # ENTRY POINT
 # ================================
 if __name__ == "__main__":
+    # Only run tests if called directly
+    test_fyers_integration()
+    print("\n🚀 Starting AI Agent...")
     main()

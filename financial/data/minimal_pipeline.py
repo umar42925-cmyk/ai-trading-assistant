@@ -6,10 +6,16 @@ import os
 import json
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.append(str(Path(__file__).parent.parent))
+
 
 class MinimalMarketPipeline:
-    """Minimal pipeline for your existing environment"""
+    """Complete market data pipeline with Yahoo Finance, Fyers, and database storage"""
     
     def __init__(self):
         # Database path in your project
@@ -40,10 +46,22 @@ class MinimalMarketPipeline:
         
         try:
             from fyers_apiv3 import fyersModel
-            available.append("fyers")
-            print("✅ Fyers available")
+            available.append("fyers_legacy")
+            print("✅ Fyers (Legacy SDK) available")
         except ImportError:
             print("⚠️ fyers-apiv3 not installed")
+        
+        # Try new Fyers integration if available
+        try:
+            from auth.fyers_auth import FyersAuth
+            auth = FyersAuth()
+            if auth.is_authenticated():
+                available.append("fyers_new")
+                print("✅ Fyers (New Integration) available and authenticated")
+            else:
+                print("⚠️ Fyers (New Integration) available but not authenticated")
+        except ImportError:
+            pass  # New integration not available
         
         return available
     
@@ -84,6 +102,17 @@ class MinimalMarketPipeline:
         )
         ''')
         
+        # Cache table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT UNIQUE NOT NULL,
+            value TEXT NOT NULL,
+            expires_at DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
         conn.commit()
         conn.close()
         print(f"✅ Database initialized: {self.db_path}")
@@ -97,12 +126,23 @@ class MinimalMarketPipeline:
             import yfinance as yf
             
             print(f"📊 Yahoo Finance: Fetching {symbol}...")
+            
+            # Clean symbol
+            if symbol.startswith("^"):
+                symbol = symbol.replace("^", "")
+            
             ticker = yf.Ticker(symbol)
             df = ticker.history(period=period, interval=interval)
             
             if df.empty:
-                print(f"   No data for {symbol}")
-                return None
+                # Try with .NS suffix for Indian stocks
+                if not any(x in symbol for x in ['.', '^', '-']):
+                    ticker = yf.Ticker(symbol + ".NS")
+                    df = ticker.history(period=period, interval=interval)
+                
+                if df.empty:
+                    print(f"   No data for {symbol}")
+                    return None
             
             # Convert to records
             records = []
@@ -122,17 +162,18 @@ class MinimalMarketPipeline:
                 "interval": interval,
                 "data": records,
                 "latest_price": float(df["Close"].iloc[-1]),
-                "record_count": len(records)
+                "record_count": len(records),
+                "currency": "USD" if ".NS" not in symbol else "INR"
             }
             
             # Store in database
             self._store_market_data(result)
             
-            print(f"✅ {symbol}: {len(records)} records, Latest: ${result['latest_price']:.2f}")
+            print(f"✅ {symbol}: {len(records)} records, Latest: {result['latest_price']:.2f}")
             return result
             
         except Exception as e:
-            print(f"❌ Yahoo Finance error: {e}")
+            print(f"❌ Yahoo Finance error for {symbol}: {e}")
             return None
     
     # ==================== FYERS ====================
@@ -142,29 +183,42 @@ class MinimalMarketPipeline:
         # Try multiple possible locations
         token_files = [
             "financial/auth/fyers_token.json",
+            "financial/auth/fyers_token.txt",
             "fyers_token.json",
+            "fyers_token.txt",
             os.path.join(os.path.expanduser("~"), "fyers_token.json"),
-            os.path.join(os.getcwd(), "fyers_token.json")
+            os.path.join(os.getcwd(), "fyers_token.txt")
         ]
         
         for token_file in token_files:
             if os.path.exists(token_file):
                 try:
                     with open(token_file, 'r') as f:
-                        data = json.load(f)
-                    
-                    token = data.get("access_token")
-                    if token:
-                        print(f"✓ Using Fyers token from: {token_file}")
-                        return token
+                        content = f.read().strip()
+                        if content.startswith('{'):
+                            data = json.loads(content)
+                            token = data.get("access_token") or data.get("token")
+                        else:
+                            token = content
+                        
+                        if token:
+                            print(f"✓ Using Fyers token from: {token_file}")
+                            return token
                 except Exception as e:
+                    print(f"  Warning reading {token_file}: {e}")
                     continue
+        
+        # Check environment variable
+        token = os.getenv("FYERS_TOKEN")
+        if token:
+            print("✓ Using Fyers token from environment")
+            return token
         
         print("⚠️ No Fyers token found")
         return None
     
     def fetch_fyers(self, symbol: str, interval: str = "D") -> Optional[Dict]:
-        """Fetch data from Fyers"""
+        """Fetch data from Fyers API"""
         try:
             from fyers_apiv3 import fyersModel
             
@@ -181,15 +235,16 @@ class MinimalMarketPipeline:
             fyers = fyersModel.FyersModel(
                 client_id=app_id,
                 token=token,
-                log_path=""
+                log_path="",
+                is_async=False
             )
             
             print(f"📊 Fyers: Fetching {symbol}...")
             
-            # Format symbol
+            # Format symbol for Fyers
             fyers_symbol = self._format_fyers_symbol(symbol)
             
-            # Date range
+            # Date range (last 30 days)
             to_date = datetime.now().strftime("%Y-%m-%d")
             from_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             
@@ -203,7 +258,7 @@ class MinimalMarketPipeline:
             })
             
             if response.get("s") != "ok":
-                print(f"   Fyers API error: {response.get('message', 'Unknown')}")
+                print(f"   Fyers API error: {response.get('message', 'Unknown error')}")
                 return None
             
             candles = response.get("candles", [])
@@ -225,7 +280,7 @@ class MinimalMarketPipeline:
                     "high": float(candle[2]),
                     "low": float(candle[3]),
                     "close": float(candle[4]),
-                    "volume": float(candle[5])
+                    "volume": float(candle[5]) if len(candle) > 5 else 0
                 })
             
             result = {
@@ -234,7 +289,8 @@ class MinimalMarketPipeline:
                 "interval": interval,
                 "data": records,
                 "latest_price": float(candles[-1][4]),
-                "record_count": len(records)
+                "record_count": len(records),
+                "currency": "INR"
             }
             
             # Store in database
@@ -243,8 +299,11 @@ class MinimalMarketPipeline:
             print(f"✅ {symbol}: {len(records)} records, Latest: ₹{result['latest_price']:.2f}")
             return result
             
+        except ImportError:
+            print("⚠️ Fyers SDK not installed")
+            return None
         except Exception as e:
-            print(f"❌ Fyers error: {e}")
+            print(f"❌ Fyers error for {symbol}: {e}")
             return None
     
     def _format_fyers_symbol(self, symbol: str) -> str:
@@ -254,42 +313,156 @@ class MinimalMarketPipeline:
                 return f"NSE:{symbol}"
             elif "NIFTY" in symbol or "BANKNIFTY" in symbol:
                 return f"NSE:{symbol}-INDEX"
+            elif symbol.startswith("^"):
+                # Remove ^ and add -INDEX if needed
+                clean = symbol.replace("^", "")
+                if "NIFTY" in clean or "BANKNIFTY" in clean:
+                    return f"NSE:{clean}-INDEX"
+                else:
+                    return f"NSE:{clean}-EQ"
             else:
                 # Default to NSE equity
                 return f"NSE:{symbol}-EQ"
         return symbol
     
-    # ==================== UNIFIED METHODS ====================
+    def fetch_upstox(self, symbol: str) -> Optional[Dict]:
+        """Fetch data from Upstox"""
+        try:
+            from financial.auth.upstox_auth import get_upstox_client
+            import upstox_client
+        
+            client = get_upstox_client()
+            if not client:
+                return None
+        
+            # Format symbol for Upstox
+            instrument_key = self._format_upstox_symbol(symbol)
+        
+            # Get quote
+            market_api = upstox_client.MarketQuoteApi(client)
+            response = market_api.get_full_market_quote(
+                instrument_key=instrument_key,
+                api_version='2.0'
+            )
+        
+            data = response.data[instrument_key]
+            ohlc = data.ohlc
+        
+            return {
+                "symbol": symbol,
+                "source": "upstox",
+                "interval": "1d",
+                "latest_price": data.last_price,
+                "data": [{
+                    "timestamp": datetime.now().isoformat(),
+                    "open": ohlc.open,
+                    "high": ohlc.high,
+                    "low": ohlc.low,
+                    "close": ohlc.close,
+                    "volume": data.volume
+                }],
+                "record_count": 1,
+                "currency": "INR"
+            }
+        except Exception as e:
+            print(f"Upstox error: {e}")
+            return None
+
+    def _format_upstox_symbol(self, symbol: str) -> str:
+        """Convert symbol to Upstox format"""
+        # Simplified mapping
+        upstox_map = {
+            'NIFTY': 'NSE_INDEX|Nifty 50',
+            'BANKNIFTY': 'NSE_INDEX|Nifty Bank',
+            'RELIANCE': 'NSE_EQ|INE002A01018',
+            'TCS': 'NSE_EQ|INE467B01029',
+        }
     
-    def fetch_market_data(self, symbol: str, source: str = "auto") -> Optional[Dict]:
+        return upstox_map.get(symbol.upper(), f'NSE_EQ|{symbol}')
+    
+    # ==================== UNIFIED FETCH METHODS ====================
+    
+    def fetch_market_data(self, symbol: str, source: str = "auto", 
+                          interval: str = "1d") -> Optional[Dict]:
         """
-        Fetch market data with automatic source selection
+        Unified method to fetch market data from any source
+        
+        Args:
+            symbol: Stock/Index symbol
+            source: "auto", "yfinance", "fyers"
+            interval: "1d", "1h", "5min", etc.
+        
+        Returns:
+            Dict with market data or None
         """
+        # Clean symbol
+        symbol = symbol.strip().upper()
+        
         # Auto-select source
         if source == "auto":
-            # Indian symbols → try Fyers first
-            is_indian = any(indicator in symbol.upper() 
-                          for indicator in ["NIFTY", "BANKNIFTY", "-EQ"])
+            # Check if symbol is Indian
+            is_indian = any(indicator in symbol for indicator in 
+                          ["NIFTY", "BANKNIFTY", "-EQ", "SENSEX", ".NS"])
             
-            if is_indian and "fyers" in self.sources:
-                data = self.fetch_fyers(symbol)
+            if is_indian and any(s in self.sources for s in ["fyers_new", "fyers_legacy"]):
+                # Try Fyers for Indian symbols
+                data = self._fetch_unified_fyers(symbol, interval)
                 if data:
                     return data
-                # Fallback to Yahoo Finance
+                
+                # Fallback to yfinance with .NS suffix
                 if "yfinance" in self.sources:
-                    return self.fetch_yfinance(symbol)
-            else:
-                # International → Yahoo Finance
-                if "yfinance" in self.sources:
-                    return self.fetch_yfinance(symbol)
+                    if not symbol.endswith(".NS") and "-INDEX" not in symbol:
+                        symbol = symbol.replace("-EQ", "") + ".NS"
+                    return self.fetch_yfinance(symbol, interval=interval)
+            
+            # For non-Indian symbols or if Fyers fails
+            if "yfinance" in self.sources:
+                return self.fetch_yfinance(symbol, interval=interval)
         
         elif source == "yfinance" and "yfinance" in self.sources:
-            return self.fetch_yfinance(symbol)
+            return self.fetch_yfinance(symbol, interval=interval)
         
-        elif source == "fyers" and "fyers" in self.sources:
-            return self.fetch_fyers(symbol)
+        elif source == "fyers":
+            return self._fetch_unified_fyers(symbol, interval)
         
         print(f"⚠️ No data source available for {symbol}")
+        return None
+    
+    def _fetch_unified_fyers(self, symbol: str, interval: str = "D") -> Optional[Dict]:
+        """Try multiple Fyers integrations"""
+        # Map interval for Fyers
+        interval_map = {
+            "1d": "D", "1h": "60", "30min": "30", "15min": "15",
+            "5min": "5", "1min": "1"
+        }
+        fyers_interval = interval_map.get(interval, "D")
+        
+        # First try new Fyers integration if available
+        if "fyers_new" in self.sources:
+            try:
+                from auth.fyers_provider import FyersDataProvider
+                provider = FyersDataProvider()
+                if provider.is_available():
+                    quote = provider.get_quote(symbol)
+                    if quote:
+                        return {
+                            "symbol": symbol,
+                            "source": "fyers_new",
+                            "interval": interval,
+                            "data": [],  # Historical data not available
+                            "latest_price": quote.get("price", 0),
+                            "record_count": 0,
+                            "quote": quote,
+                            "currency": "INR"
+                        }
+            except Exception as e:
+                print(f"New Fyers integration failed: {e}")
+        
+        # Fallback to legacy SDK
+        if "fyers_legacy" in self.sources:
+            return self.fetch_fyers(symbol, fyers_interval)
+        
         return None
     
     def get_live_price(self, symbol: str) -> Optional[float]:
@@ -297,13 +470,15 @@ class MinimalMarketPipeline:
         data = self.fetch_market_data(symbol, source="auto")
         return data.get("latest_price") if data else None
     
+    # ==================== DATABASE METHODS ====================
+    
     def _store_market_data(self, data: Dict):
         """Store market data in database"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         try:
-            for record in data["data"]:
+            for record in data.get("data", []):
                 cursor.execute('''
                 INSERT OR IGNORE INTO market_data 
                 (symbol, timestamp, open, high, low, close, volume, source, interval)
@@ -321,11 +496,42 @@ class MinimalMarketPipeline:
                 ))
             
             conn.commit()
-            print(f"💾 Stored {len(data['data'])} records for {data['symbol']}")
+            print(f"💾 Stored {len(data.get('data', []))} records for {data['symbol']}")
         except Exception as e:
             print(f"Database error: {e}")
         finally:
             conn.close()
+    
+    def get_historical_data(self, symbol: str, days: int = 30, 
+                           source: str = "auto") -> List[Dict]:
+        """Get historical data from database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+        
+        cursor.execute('''
+        SELECT timestamp, open, high, low, close, volume, source, interval
+        FROM market_data 
+        WHERE symbol = ? AND timestamp >= ?
+        ORDER BY timestamp ASC
+        ''', (symbol, cutoff_date))
+        
+        records = []
+        for row in cursor.fetchall():
+            records.append({
+                "timestamp": row[0],
+                "open": row[1],
+                "high": row[2],
+                "low": row[3],
+                "close": row[4],
+                "volume": row[5],
+                "source": row[6],
+                "interval": row[7]
+            })
+        
+        conn.close()
+        return records
     
     # ==================== PORTFOLIO METHODS ====================
     
@@ -348,14 +554,43 @@ class MinimalMarketPipeline:
             ))
             
             conn.commit()
-            print(f"✅ Added {quantity} shares of {symbol} at ${entry_price:.2f}")
+            print(f"✅ Added {quantity} shares of {symbol} at {entry_price:.2f}")
         except Exception as e:
             print(f"Portfolio error: {e}")
         finally:
             conn.close()
     
-    def get_portfolio_summary(self) -> Dict:
-        """Get portfolio summary with current values"""
+    def update_portfolio_position(self, position_id: int, **kwargs):
+        """Update portfolio position"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            update_fields = []
+            values = []
+            
+            for key, value in kwargs.items():
+                if key in ["quantity", "entry_price", "current_price", "notes"]:
+                    update_fields.append(f"{key} = ?")
+                    values.append(value)
+            
+            if update_fields:
+                values.append(position_id)
+                cursor.execute(f'''
+                UPDATE portfolio 
+                SET {', '.join(update_fields)}
+                WHERE id = ?
+                ''', values)
+                
+                conn.commit()
+                print(f"✅ Updated position {position_id}")
+        except Exception as e:
+            print(f"Update portfolio error: {e}")
+        finally:
+            conn.close()
+    
+    def get_portfolio_positions(self) -> List[Dict]:
+        """Get all portfolio positions"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -363,8 +598,33 @@ class MinimalMarketPipeline:
         positions = cursor.fetchall()
         conn.close()
         
+        result = []
+        for pos in positions:
+            result.append({
+                "id": pos[0],
+                "symbol": pos[1],
+                "quantity": pos[2],
+                "entry_price": pos[3],
+                "entry_date": pos[4],
+                "current_price": pos[5],
+                "notes": pos[6],
+                "created_at": pos[7]
+            })
+        
+        return result
+    
+    def get_portfolio_summary(self) -> Dict:
+        """Get portfolio summary with current values"""
+        positions = self.get_portfolio_positions()
+        
         if not positions:
-            return {"total_value": 0, "positions": []}
+            return {
+                "total_value": 0,
+                "total_invested": 0,
+                "total_pnl": 0,
+                "total_pnl_pct": 0,
+                "positions": []
+            }
         
         summary = {
             "total_invested": 0,
@@ -374,21 +634,21 @@ class MinimalMarketPipeline:
         }
         
         for pos in positions:
-            symbol = pos[1]
-            quantity = pos[2]
-            entry_price = pos[3]
+            symbol = pos["symbol"]
+            quantity = pos["quantity"]
+            entry_price = pos["entry_price"]
             
             # Get current price
             current_price = self.get_live_price(symbol)
             if not current_price:
-                current_price = entry_price
+                current_price = pos.get("current_price", entry_price)
             
             invested = quantity * entry_price
             current_value = quantity * current_price
             pnl = current_value - invested
             pnl_pct = (pnl / invested * 100) if invested > 0 else 0
             
-            summary["positions"].append({
+            position_summary = {
                 "symbol": symbol,
                 "quantity": quantity,
                 "entry_price": entry_price,
@@ -396,9 +656,11 @@ class MinimalMarketPipeline:
                 "invested": invested,
                 "current_value": current_value,
                 "pnl": pnl,
-                "pnl_pct": pnl_pct
-            })
+                "pnl_pct": pnl_pct,
+                "notes": pos.get("notes", "")
+            }
             
+            summary["positions"].append(position_summary)
             summary["total_invested"] += invested
             summary["total_current"] += current_value
         
@@ -406,12 +668,110 @@ class MinimalMarketPipeline:
         summary["total_pnl_pct"] = (summary["total_pnl"] / summary["total_invested"] * 100) if summary["total_invested"] > 0 else 0
         
         return summary
+    
+    # ==================== CACHE METHODS ====================
+    
+    def _get_cache(self, key: str) -> Optional[Any]:
+        """Get value from cache"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+        SELECT value, expires_at FROM cache 
+        WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)
+        ''', (key, datetime.now().isoformat()))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            try:
+                return json.loads(row[0])
+            except:
+                return row[0]
+        
+        return None
+    
+    def _set_cache(self, key: str, value: Any, ttl_seconds: int = 300):
+        """Set value in cache"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        expires_at = None
+        if ttl_seconds > 0:
+            expires_at = (datetime.now() + timedelta(seconds=ttl_seconds)).isoformat()
+        
+        try:
+            json_value = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+            
+            cursor.execute('''
+            INSERT OR REPLACE INTO cache (key, value, expires_at)
+            VALUES (?, ?, ?)
+            ''', (key, json_value, expires_at))
+            
+            conn.commit()
+        except Exception as e:
+            print(f"Cache error: {e}")
+        finally:
+            conn.close()
+    
+    # ==================== HELPER METHODS ====================
+    
+    def get_multi_prices(self, symbols: List[str]) -> Dict[str, Optional[float]]:
+        """Get prices for multiple symbols"""
+        result = {}
+        for symbol in symbols:
+            result[symbol] = self.get_live_price(symbol)
+        return result
+    
+    def get_symbol_info(self, symbol: str) -> Optional[Dict]:
+        """Get information about a symbol"""
+        data = self.fetch_market_data(symbol)
+        if not data:
+            return None
+        
+        return {
+            "symbol": symbol,
+            "current_price": data.get("latest_price"),
+            "currency": data.get("currency", "USD"),
+            "source": data.get("source"),
+            "data_points": len(data.get("data", [])),
+            "last_updated": datetime.now().isoformat()
+        }
+    
+    def search_symbols(self, query: str) -> List[Dict]:
+        """Search for symbols (simplified - in production would use API)"""
+        # Common symbols for quick search
+        common_symbols = {
+            "AAPL": {"name": "Apple Inc.", "type": "stock", "exchange": "NASDAQ"},
+            "MSFT": {"name": "Microsoft Corporation", "type": "stock", "exchange": "NASDAQ"},
+            "GOOGL": {"name": "Alphabet Inc.", "type": "stock", "exchange": "NASDAQ"},
+            "NIFTY": {"name": "Nifty 50", "type": "index", "exchange": "NSE"},
+            "RELIANCE": {"name": "Reliance Industries", "type": "stock", "exchange": "NSE"},
+            "TCS": {"name": "Tata Consultancy Services", "type": "stock", "exchange": "NSE"},
+            "BTC-USD": {"name": "Bitcoin", "type": "crypto", "exchange": "Crypto"},
+            "^GSPC": {"name": "S&P 500", "type": "index", "exchange": "NYSE"}
+        }
+        
+        query = query.upper()
+        results = []
+        
+        for symbol, info in common_symbols.items():
+            if query in symbol or query in info["name"].upper():
+                results.append({
+                    "symbol": symbol,
+                    **info,
+                    "suggested_symbol": f"{symbol}.NS" if info["exchange"] == "NSE" and "-EQ" not in symbol else symbol
+                })
+        
+        return results[:10]  # Limit results
+
 
 # ==================== TEST FUNCTION ====================
 
 def test_pipeline():
     """Test the pipeline"""
-    print("🧪 Testing Minimal Market Pipeline")
+    print("🧪 Testing Complete Market Pipeline")
     print("="*50)
     
     # Initialize
@@ -424,7 +784,7 @@ def test_pipeline():
     for symbol in us_symbols:
         data = pipeline.fetch_market_data(symbol, source="yfinance")
         if data:
-            print(f"   ✅ {symbol}: ${data['latest_price']:.2f} ({data['source']})")
+            print(f"   ✅ {symbol}: {data['latest_price']:.2f} ({data['source']})")
         else:
             print(f"   ❌ {symbol}: Failed")
     
@@ -435,22 +795,58 @@ def test_pipeline():
     for symbol in indian_symbols:
         data = pipeline.fetch_market_data(symbol, source="fyers")
         if data:
-            print(f"   ✅ {symbol}: ₹{data['latest_price']:.2f} ({data['source']})")
+            print(f"   ✅ {symbol}: {data['latest_price']:.2f} ({data['source']})")
         else:
             print(f"   ❌ {symbol}: Failed or not authenticated")
     
-    # Test 3: Portfolio
-    print("\n3. Testing Portfolio...")
-    # Add some test positions
+    # Test 3: Auto detection
+    print("\n3. Testing Auto Source Detection...")
+    test_symbols = ["AAPL", "NIFTY", "TCS.NS", "BTC-USD"]
+    
+    for symbol in test_symbols:
+        data = pipeline.fetch_market_data(symbol, source="auto")
+        if data:
+            print(f"   ✅ {symbol}: {data['latest_price']:.2f} via {data['source']}")
+        else:
+            print(f"   ❌ {symbol}: Failed")
+    
+    # Test 4: Portfolio
+    print("\n4. Testing Portfolio...")
+    # Add test positions
     pipeline.add_portfolio_position("AAPL", 10, 150.25, "Test position")
     pipeline.add_portfolio_position("MSFT", 5, 300.50, "Another test")
     
     portfolio = pipeline.get_portfolio_summary()
-    print(f"   Portfolio value: ${portfolio['total_current']:.2f}")
-    print(f"   P&L: ${portfolio['total_pnl']:.2f} ({portfolio['total_pnl_pct']:.1f}%)")
+    print(f"   Total positions: {len(portfolio['positions'])}")
+    print(f"   Portfolio value: {portfolio['total_current']:.2f}")
+    print(f"   Total P&L: {portfolio['total_pnl']:.2f} ({portfolio['total_pnl_pct']:.1f}%)")
+    
+    # Test 5: Historical data
+    print("\n5. Testing Historical Data...")
+    historical = pipeline.get_historical_data("AAPL", days=7)
+    print(f"   AAPL historical records: {len(historical)}")
+    
+    # Test 6: Multi prices
+    print("\n6. Testing Multi Prices...")
+    symbols = ["AAPL", "MSFT", "GOOGL"]
+    prices = pipeline.get_multi_prices(symbols)
+    for sym, price in prices.items():
+        if price:
+            print(f"   {sym}: {price:.2f}")
+        else:
+            print(f"   {sym}: N/A")
+    
+    # Test 7: Symbol search
+    print("\n7. Testing Symbol Search...")
+    results = pipeline.search_symbols("apple")
+    for result in results:
+        print(f"   Found: {result['symbol']} - {result['name']}")
     
     print("\n" + "="*50)
-    print("✅ Test completed!")
+    print("✅ All tests completed!")
+    
+    return pipeline
+
 
 if __name__ == "__main__":
     test_pipeline()
