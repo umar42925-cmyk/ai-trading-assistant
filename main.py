@@ -5,7 +5,9 @@ import sys
 import os
 sys.dont_write_bytecode = True  # Skip .pyc generation
 
-# Defer Streamlit check
+# ==============================
+# GLOBAL VARIABLES
+# ==============================
 if 'STREAMLIT_RUNTIME_EXISTS' not in os.environ:
     os.environ['STREAMLIT_RUNTIME_EXISTS'] = '1'
 
@@ -28,8 +30,6 @@ load_dotenv()  # safe: does nothing on Streamlit Cloud
 from datetime import datetime, timedelta
 
 # Add near the top with other global variables
-MARKET_PIPELINE_AVAILABLE = False
-market_pipeline = None
 ENHANCED_MEMORY_AVAILABLE = False
 vector_memory = None
 personality_engine = None
@@ -61,10 +61,27 @@ MARKET_TOOLS_AVAILABLE = False
 market_pipeline = None
 financial_tools = None
 UPSTOX_AVAILABLE = False
+PROFESSIONAL_PIPELINE_AVAILABLE = False
+professional_pipeline = None
 
 print("🔍 Loading financial modules...")
 
-# 1. Import MinimalMarketPipeline from financial.data.minimal_pipeline
+# 1. Try to import PROFESSIONAL pipeline first (preferred)
+PROFESSIONAL_PIPELINE_AVAILABLE = False
+professional_pipeline = None
+
+try:
+    from financial.data.professional_pipeline import ProfessionalMarketPipeline
+    professional_pipeline = ProfessionalMarketPipeline(db_path="financial/data/professional.db")
+    PROFESSIONAL_PIPELINE_AVAILABLE = True
+    print(f"✅ Professional pipeline initialized from financial.data.professional_pipeline")
+    print(f"   Real-time data: ENABLED")
+except ImportError as e:
+    print(f"⚠️ Professional pipeline import failed: {e}")
+    PROFESSIONAL_PIPELINE_AVAILABLE = False
+    # Keep using minimal pipeline
+
+# 2. Import MinimalMarketPipeline as fallback
 try:
     from financial.data.minimal_pipeline import MinimalMarketPipeline
     market_pipeline = MinimalMarketPipeline()
@@ -1014,11 +1031,43 @@ def routellm_think_with_image(user_input, working_memory, core_identity, image_d
 
 def enhanced_get_market_data(symbol, timeframe="1d", source="auto"):
     """
-    Enhanced market data fetcher that works with your existing code
+    Enhanced market data fetcher - NOW WITH REAL-TIME CAPABILITIES
     """
     print(f"🔍 Fetching market data for: {symbol}")
     
-    # If market pipeline is available, use it
+    # If professional pipeline is available, use it
+    if PROFESSIONAL_PIPELINE_AVAILABLE and professional_pipeline:
+        try:
+            data = professional_pipeline.fetch_market_data(symbol, source=source, timeframe=timeframe)
+            
+            if data and data.get("latest_price"):
+                # Ensure all fields are present
+                result = {
+                    'symbol': symbol,
+                    'price': float(data.get("latest_price", 0)),
+                    'open': float(data.get('open', data.get("latest_price", 0))),
+                    'high': float(data.get('high', data.get("latest_price", 0))),
+                    'low': float(data.get('low', data.get("latest_price", 0))),
+                    'volume': int(data.get('volume', 0)),
+                    'timestamp': data.get('timestamp', datetime.now().isoformat()),
+                    'source': data.get('source', 'professional_pipeline'),
+                    'status': 'ok',
+                    'data': data.get('data', []),
+                    'interval': data.get('interval', timeframe),
+                    'realtime': data.get('realtime', False)
+                }
+                
+                # If real-time data, add WebSocket status
+                if result['realtime']:
+                    result['websocket_status'] = 'connected'
+                
+                return result
+                
+        except Exception as e:
+            print(f"Professional pipeline fetch failed: {e}")
+            # Fall through to yfinance
+    
+    # Fallback to existing minimal pipeline
     if MARKET_PIPELINE_AVAILABLE and market_pipeline:
         try:
             data = market_pipeline.fetch_market_data(symbol, source=source)
@@ -1032,10 +1081,10 @@ def enhanced_get_market_data(symbol, timeframe="1d", source="auto"):
                     'interval': data.get("interval", timeframe)
                 }
         except Exception as e:
-            print(f"Pipeline fetch failed: {e}")
+            print(f"Minimal pipeline fetch failed: {e}")
             # Fall through to yfinance
     
-    # Fallback to yfinance (always works)
+    # Ultimate fallback to yfinance (always works)
     try:
         import yfinance as yf
         
@@ -1077,7 +1126,8 @@ def enhanced_get_market_data(symbol, timeframe="1d", source="auto"):
             'timestamp': latest.name.isoformat() if hasattr(latest.name, 'isoformat') else str(latest.name),
             'source': 'yfinance',
             'status': 'ok',
-            'interval': interval
+            'interval': interval,
+            'realtime': False
         }
         
     except Exception as e:

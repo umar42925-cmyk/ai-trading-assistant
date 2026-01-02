@@ -131,15 +131,34 @@ class MinimalMarketPipeline:
         
             # Format symbol for Upstox
             instrument_key = self._format_upstox_symbol(symbol)
+            
+            # If None, symbol not available on Upstox
+            if instrument_key is None:
+                print(f"ℹ️ {symbol} not available on Upstox (non-Indian symbol)")
+                return None
         
             # Get quote
             market_api = upstox_client.MarketQuoteApi(client)
             response = market_api.get_full_market_quote(
-                instrument_key=instrument_key,
+                symbol=instrument_key,
                 api_version='2.0'
             )
         
-            data = response.data[instrument_key]
+            # Find the correct key in response
+            data_key = None
+            for key in response.data.keys():
+                if symbol.upper() in key or (instrument_key and instrument_key.split('|')[-1] in key):
+                    data_key = key
+                    break
+            
+            if not data_key:
+                # Try first key as fallback
+                data_key = list(response.data.keys())[0] if response.data else None
+            
+            if not data_key:
+                return None
+        
+            data = response.data[data_key]
             ohlc = data.ohlc
         
             return {
@@ -159,47 +178,100 @@ class MinimalMarketPipeline:
                 "currency": "INR"
             }
         except Exception as e:
-            print(f"Upstox error: {e}")
+            print(f"Upstox error for {symbol}: {type(e).__name__}: {str(e)[:100]}")
             return None
 
     def _format_upstox_symbol(self, symbol: str) -> str:
-        """Convert symbol to Upstox format"""
-        # Simplified mapping
+        """Convert symbol to Upstox format - IMPROVED"""
+        symbol = symbol.upper().strip()
+        
+        # Remove Yahoo prefix
+        if symbol.startswith("^"):
+            symbol = symbol[1:]
+        
+        # Remove .NS suffix
+        if symbol.endswith(".NS"):
+            symbol = symbol[:-3]
+        
+        # Remove -EQ, -INDEX suffixes
+        if symbol.endswith("-EQ"):
+            symbol = symbol[:-3]
+        elif symbol.endswith("-INDEX"):
+            symbol = symbol[:-6]
+        
+        # Special mappings
         upstox_map = {
             'NIFTY': 'NSE_INDEX|Nifty 50',
             'BANKNIFTY': 'NSE_INDEX|Nifty Bank',
+            'SENSEX': 'BSE_INDEX|SENSEX',
+            'NSEI': 'NSE_INDEX|Nifty 50',  # Yahoo's NSEI
+            'NSEBANK': 'NSE_INDEX|Nifty Bank',  # Yahoo's NSEBANK
+            'BSESN': 'BSE_INDEX|SENSEX',  # Yahoo's BSESN
             'RELIANCE': 'NSE_EQ|INE002A01018',
             'TCS': 'NSE_EQ|INE467B01029',
+            'INFY': 'NSE_EQ|INE009A01021',
+            'HDFCBANK': 'NSE_EQ|INE040A01026',
+            'ICICIBANK': 'NSE_EQ|INE090A01021',
+            'AAPL': None,  # Skip - not available on Upstox
+            'TSLA': None,  # Skip - not available on Upstox
+            'GOOGL': None,  # Skip - not available on Upstox
         }
-    
-        return upstox_map.get(symbol.upper(), f'NSE_EQ|{symbol}')
+        
+        if symbol in upstox_map:
+            return upstox_map[symbol]
+        
+        # Default to NSE equity for Indian symbols, None for others
+        if self._is_indian_symbol(symbol):
+            return f'NSE_EQ|{symbol}'
+        else:
+            return None  # Skip Upstox for non-Indian symbols
     
     # ==================== YAHOO FINANCE ====================
     
     def fetch_yfinance(self, symbol: str, period: str = "1mo", 
-                       interval: str = "1d") -> Optional[Dict]:
+                    interval: str = "1d") -> Optional[Dict]:
         """Fetch data from Yahoo Finance"""
         try:
             import yfinance as yf
+            import warnings
+            
+            # Suppress warnings
+            warnings.filterwarnings('ignore', message='possibly delisted')
             
             print(f"📊 Yahoo Finance: Fetching {symbol}...")
             
-            # Clean symbol
-            if symbol.startswith("^"):
-                symbol = symbol.replace("^", "")
+            # Map symbols
+            symbol_map = {
+                "NIFTY": "^NSEI",
+                "BANKNIFTY": "^NSEBANK", 
+                "SENSEX": "^BSESN",
+                "NIFTY-INDEX": "^NSEI",
+                "BANKNIFTY-INDEX": "^NSEBANK",
+                "^GSPC": "^GSPC",
+                "GSPC": "^GSPC",
+            }
             
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period, interval=interval)
+            yahoo_symbol = symbol_map.get(symbol, symbol)
+            
+            # If Indian symbol without suffix and not an index, add .NS
+            if (self._is_indian_symbol(symbol) and 
+                not any(x in yahoo_symbol for x in ['.', '^', '-']) and
+                "NIFTY" not in symbol and "SENSEX" not in symbol):
+                yahoo_symbol = yahoo_symbol + ".NS"
+            
+            ticker = yf.Ticker(yahoo_symbol)
+            
+            # FIX: Remove progress parameter for newer yfinance versions
+            try:
+                # Try without progress parameter
+                df = ticker.history(period=period, interval=interval)
+            except TypeError:
+                # Fallback for older versions
+                df = ticker.history(period=period, interval=interval, progress=False)
             
             if df.empty:
-                # Try with .NS suffix for Indian stocks
-                if not any(x in symbol for x in ['.', '^', '-']):
-                    ticker = yf.Ticker(symbol + ".NS")
-                    df = ticker.history(period=period, interval=interval)
-                
-                if df.empty:
-                    print(f"   No data for {symbol}")
-                    return None
+                print(f"   No data for {symbol} (tried as {yahoo_symbol})")
+                return None
             
             # Convert to records
             records = []
@@ -220,7 +292,7 @@ class MinimalMarketPipeline:
                 "data": records,
                 "latest_price": float(df["Close"].iloc[-1]),
                 "record_count": len(records),
-                "currency": "USD" if ".NS" not in symbol else "INR"
+                "currency": "INR" if ".NS" in yahoo_symbol or yahoo_symbol in ["^NSEI", "^NSEBANK", "^BSESN"] else "USD"
             }
             
             # Store in database
@@ -434,7 +506,7 @@ class MinimalMarketPipeline:
                 return ["yfinance", "upstox", "fyers"]
 
     def _is_indian_symbol(self, symbol: str) -> bool:
-        """Check if symbol is Indian with better logic"""
+        """Check if symbol is Indian with improved logic"""
         symbol = symbol.upper().strip()
         
         # Remove common suffixes for checking
@@ -462,6 +534,57 @@ class MinimalMarketPipeline:
             "NIFTYMIDCAP", "NIFTYSMALLCAP", "SENSEX30", "BSE500"
         ]
         
+        # KNOWN GLOBAL SYMBOLS (should NOT be Indian)
+        known_global_symbols = [
+            "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "TSLA", "META", "NVDA", 
+            "BRK.B", "BRK.A", "JPM", "JNJ", "V", "UNH", "XOM", "WMT", "PG",
+            "MA", "HD", "CVX", "BAC", "PFE", "KO", "ABBV", "AVGO", "COST",
+            "DIS", "CSCO", "PEP", "ADBE", "TMO", "ACN", "DHR", "NFLX", "MCD",
+            "CRM", "ABT", "LIN", "NKE", "PM", "TXN", "CMCSA", "AMD", "HON",
+            "QCOM", "INTU", "INTC", "IBM", "GS", "CAT", "UPS", "RTX", "BA",
+            "UNP", "PLD", "T", "DE", "SPGI", "LOW", "SBUX", "ISRG", "LMT",
+            "MDT", "BMY", "GE", "AMT", "BLK", "ELV", "C", "VZ", "PYPL", "GILD",
+            "MO", "AXP", "SCHW", "NOW", "ADI", "BKNG", "MMM", "CI", "TJX",
+            "CVS", "CB", "MDLZ", "DUK", "SO", "ZTS", "REGN", "TGT", "BDX",
+            "PNC", "BSX", "EOG", "NOC", "USB", "CL", "COP", "AMGN", "SHW",
+            "SLB", "FISV", "ICE", "NSC", "PGR", "EQIX", "ORCL", "HCA", "APD",
+            "MCK", "FDX", "EMR", "PSX", "GD", "AON", "MET", "NEM", "KMB",
+            "GM", "MRNA", "DG", "SRE", "MAR", "APO", "WM", "KLAC", "CTAS",
+            "ADP", "GIS", "CME", "SNPS", "ECL", "AEP", "AIG", "CCI", "LHX",
+            "PH", "AJG", "TDG", "MS", "SPG", "ITW", "NUE", "TRV", "OXY",
+            "DOW", "STZ", "VRTX", "EW", "AZO", "WELL", "CDNS", "CSX", "ADSK",
+            "ROST", "MTB", "MCO", "IDXX", "ORLY", "PCAR", "MNST", "AFL",
+            "DLR", "ROP", "PPG", "PAYX", "ALL", "YUM", "RSG", "F", "TFC",
+            "DHI", "SYY", "WFC", "GLW", "EL", "WMB", "AME", "TT", "IQV",
+            "HUM", "PSA", "EA", "ANET", "RMD", "VLO", "CTSH", "PRU", "HLT",
+            "PEG", "HPQ", "FTNT", "MTD", "ROK", "FAST", "MLM", "SWKS", "DD",
+            "KMI", "OTIS", "KHC", "WBD", "LYB", "AVB", "BIIB", "OKE", "EXC",
+            "IR", "SBAC", "KR", "DAL", "EFX", "NDAQ", "HAL", "ES", "ALB",
+            "EBAY", "VMC", "CPRT", "XEL", "FTV", "MPWR", "TSCO", "GRMN",
+            "DFS", "AWK", "KEYS", "GWW", "ED", "WST", "CBRE", "APH",
+            "TTWO", "STT", "RJF", "WEC", "EQR", "ZBH", "DTE", "VRSK", "ULTA",
+            "ETN", "ARE", "CTVA", "WTW", "GNRC", "FANG", "LVS", "DOV", "PFG",
+            "D", "DLTR", "WAB", "LYV", "IRM", "EXR", "WY", "PAYC", "BR",
+            "LEN", "HBAN", "MSCI", "INVH", "CFG", "HPE", "NTAP", "VTR",
+            "HIG", "LUV", "MTCH", "STX", "CZR", "LRCX", "CDW", "NVR", "ROL",
+            "CMS", "OMC", "HSY", "DGX", "KEY", "CNC", "BXP", "MKC", "NI",
+            "MAA", "FE", "RF", "KMX", "HWM", "AVY", "PTC", "SNA", "WRB",
+            "STE", "ESS", "K", "CHTR", "COO", "AKAM", "SJM", "SYF",
+            "J", "TDY", "EXPD", "WDC", "CINF", "LH", "BWA", "REG", "TPR",
+            "FBHS", "SWK", "CLX", "EPAM", "UAL", "NDSN", "ARES", "MOS",
+            "POOL", "TROW", "MAS", "AEE", "FLT", "IFF", "CE", "TXT", "PNR",
+            "XYL", "DISH", "HST", "IP", "RCL", "TER", "BBY", "UDR", "JKHY",
+            "CPB", "HOLX", "JNPR", "NWSA", "GL", "NTRS", "DRI", "QRVO",
+            "WHR", "EIX", "NRG", "LKQ", "IVZ", "TFX", "HRL", "ATO", "BEN",
+            "L", "PNW", "CPT", "AIZ", "AES", "BRO", "CMA", "TAP", "ZBRA",
+            "CAG", "RE", "AAP", "FITB", "WAT", "IPG", "ETR", "HAS", "FFIV",
+            "VFC", "PKI", "NWL", "PBCT", "WU", "LDOS", "EMN", "RL", "JEF",
+            "ALK", "UHS", "BALL", "CTRA", "PVH", "MRO", "HBI", "FOX", "NCLH",
+            "LW", "LNC", "NLOK", "BF.B", "VNO", "CCL", "DISCA", "DXC", "KSS",
+            "NLSN", "SEE", "GPS", "FRT", "MGM", "LEG", "SLG", "DVA", "OGN",
+            "FOXA", "HRB", "BTC", "ETH"
+        ]
+        
         # Check if it's a known Indian stock
         if base_symbol in known_indian_stocks:
             return True
@@ -469,6 +592,10 @@ class MinimalMarketPipeline:
         # Check if it's a known Indian index
         if base_symbol in known_indian_indices:
             return True
+        
+        # Check if it's a known GLOBAL stock (NOT Indian)
+        if base_symbol in known_global_symbols:
+            return False
         
         # Check by pattern (NSE format)
         if symbol.startswith("NSE:") or symbol.startswith("BSE:"):
@@ -478,12 +605,24 @@ class MinimalMarketPipeline:
         if any(symbol.endswith(suffix) for suffix in suffixes_to_remove):
             return True
         
+        # Check if it's a US index (starts with ^)
+        if symbol.startswith("^"):
+            return False
+        
+        # Check if it's a cryptocurrency
+        if "-USD" in symbol or "-INR" in symbol or symbol in ["BTC", "ETH", "XRP", "ADA"]:
+            return False
+        
         # Check if it looks like an NSE/BSE symbol (typically short, alphanumeric)
         if 2 <= len(base_symbol) <= 20 and base_symbol.isalnum():
             # Could be Indian, check with additional patterns
             if base_symbol.isalpha() and base_symbol.isupper():
-                # All caps alphabetic - likely Indian stock code
-                return True
+                # Default to not Indian unless we have evidence otherwise
+                # Most Indian symbols are 2-8 chars, US can be longer
+                if len(base_symbol) <= 8:
+                    return True  # Short uppercase - likely Indian
+                else:
+                    return False  # Longer symbols more likely global
         
         # Default to not Indian
         return False

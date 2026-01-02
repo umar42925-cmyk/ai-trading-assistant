@@ -13,3 +13,10 @@ chromadb
 sentence-transformers
 sqlite3
 numpy
+
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=12.0.0  # For Parquet support
+yfinance>=0.2.0
+# fyers-apiv3  # Uncomment when you have Fyers WebSocket
+# upstox-python  # Uncomment when you have Upstox WebSocket
