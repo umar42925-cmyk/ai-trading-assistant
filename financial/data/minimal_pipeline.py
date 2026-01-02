@@ -117,6 +117,63 @@ class MinimalMarketPipeline:
         conn.close()
         print(f"✅ Database initialized: {self.db_path}")
     
+    # ==================== Upstox ====================
+
+    def fetch_upstox(self, symbol: str) -> Optional[Dict]:
+        """Fetch data from Upstox"""
+        try:
+            from financial.auth.upstox_auth import get_upstox_client
+            import upstox_client
+        
+            client = get_upstox_client()
+            if not client:
+                return None
+        
+            # Format symbol for Upstox
+            instrument_key = self._format_upstox_symbol(symbol)
+        
+            # Get quote
+            market_api = upstox_client.MarketQuoteApi(client)
+            response = market_api.get_full_market_quote(
+                instrument_key=instrument_key,
+                api_version='2.0'
+            )
+        
+            data = response.data[instrument_key]
+            ohlc = data.ohlc
+        
+            return {
+                "symbol": symbol,
+                "source": "upstox",
+                "interval": "1d",
+                "latest_price": data.last_price,
+                "data": [{
+                    "timestamp": datetime.now().isoformat(),
+                    "open": ohlc.open,
+                    "high": ohlc.high,
+                    "low": ohlc.low,
+                    "close": ohlc.close,
+                    "volume": data.volume
+                }],
+                "record_count": 1,
+                "currency": "INR"
+            }
+        except Exception as e:
+            print(f"Upstox error: {e}")
+            return None
+
+    def _format_upstox_symbol(self, symbol: str) -> str:
+        """Convert symbol to Upstox format"""
+        # Simplified mapping
+        upstox_map = {
+            'NIFTY': 'NSE_INDEX|Nifty 50',
+            'BANKNIFTY': 'NSE_INDEX|Nifty Bank',
+            'RELIANCE': 'NSE_EQ|INE002A01018',
+            'TCS': 'NSE_EQ|INE467B01029',
+        }
+    
+        return upstox_map.get(symbol.upper(), f'NSE_EQ|{symbol}')
+    
     # ==================== YAHOO FINANCE ====================
     
     def fetch_yfinance(self, symbol: str, period: str = "1mo", 
@@ -325,110 +382,155 @@ class MinimalMarketPipeline:
                 return f"NSE:{symbol}-EQ"
         return symbol
     
-    def fetch_upstox(self, symbol: str) -> Optional[Dict]:
-        """Fetch data from Upstox"""
-        try:
-            from financial.auth.upstox_auth import get_upstox_client
-            import upstox_client
-        
-            client = get_upstox_client()
-            if not client:
-                return None
-        
-            # Format symbol for Upstox
-            instrument_key = self._format_upstox_symbol(symbol)
-        
-            # Get quote
-            market_api = upstox_client.MarketQuoteApi(client)
-            response = market_api.get_full_market_quote(
-                instrument_key=instrument_key,
-                api_version='2.0'
-            )
-        
-            data = response.data[instrument_key]
-            ohlc = data.ohlc
-        
-            return {
-                "symbol": symbol,
-                "source": "upstox",
-                "interval": "1d",
-                "latest_price": data.last_price,
-                "data": [{
-                    "timestamp": datetime.now().isoformat(),
-                    "open": ohlc.open,
-                    "high": ohlc.high,
-                    "low": ohlc.low,
-                    "close": ohlc.close,
-                    "volume": data.volume
-                }],
-                "record_count": 1,
-                "currency": "INR"
-            }
-        except Exception as e:
-            print(f"Upstox error: {e}")
-            return None
-
-    def _format_upstox_symbol(self, symbol: str) -> str:
-        """Convert symbol to Upstox format"""
-        # Simplified mapping
-        upstox_map = {
-            'NIFTY': 'NSE_INDEX|Nifty 50',
-            'BANKNIFTY': 'NSE_INDEX|Nifty Bank',
-            'RELIANCE': 'NSE_EQ|INE002A01018',
-            'TCS': 'NSE_EQ|INE467B01029',
-        }
-    
-        return upstox_map.get(symbol.upper(), f'NSE_EQ|{symbol}')
-    
     # ==================== UNIFIED FETCH METHODS ====================
+    
+    def choose_data_source(self, symbol: str, interval: str = "1d") -> List[str]:
+        """
+        Smart data source selection with proper fallback sequence
+        Brokers (Upstox/Fyers) can provide both live and historical data
+        
+        Args:
+            symbol: Stock symbol
+            interval: Time interval ('1m', '5m', '15m', '1h', '1d', '1wk', '1mo')
+        
+        Returns:
+            List of sources in priority order
+        """
+        symbol = symbol.upper().strip()
+        
+        # Check if it's an Indian symbol
+        is_indian = self._is_indian_symbol(symbol)
+        
+        # Determine if we need real-time capabilities
+        is_realtime_interval = interval in ["1m", "5m", "15m", "30m", "1h"]
+        is_historical_interval = interval in ["1d", "1wk", "1mo", "3mo", "6mo", "1y"]
+        
+        print(f"🔍 Source selection for {symbol}: interval={interval}, indian={is_indian}")
+        print(f"   Real-time interval: {is_realtime_interval}")
+        print(f"   Historical interval: {is_historical_interval}")
+        
+        # ========== INDIAN SYMBOLS ==========
+        if is_indian:
+            if is_realtime_interval:
+                # For real-time Indian data: Brokers first (they have best real-time)
+                return ["upstox", "fyers", "yfinance"]
+            elif is_historical_interval:
+                # For historical Indian data: Try brokers first as they might have cleaner data
+                return ["upstox", "fyers", "yfinance"]
+            else:
+                # Default for other intervals
+                return ["upstox", "fyers", "yfinance"]
+        
+        # ========== GLOBAL SYMBOLS ==========
+        else:
+            if is_realtime_interval:
+                # For real-time global: Yahoo Finance has good real-time for global
+                return ["yfinance", "upstox", "fyers"]
+            elif is_historical_interval:
+                # For historical global: Yahoo Finance is best
+                return ["yfinance", "upstox", "fyers"]
+            else:
+                # Default for global
+                return ["yfinance", "upstox", "fyers"]
+
+    def _is_indian_symbol(self, symbol: str) -> bool:
+        """Check if symbol is Indian with better logic"""
+        symbol = symbol.upper().strip()
+        
+        # Remove common suffixes for checking
+        base_symbol = symbol
+        suffixes_to_remove = [".NS", ".BO", ".NSE", ".BSE", "-EQ", "-INDEX", "-BE", "-NE"]
+        
+        for suffix in suffixes_to_remove:
+            if symbol.endswith(suffix):
+                base_symbol = symbol[:-len(suffix)]
+                break
+        
+        # Known Indian stocks and indices
+        known_indian_stocks = [
+            "RELIANCE", "TCS", "INFY", "HDFCBANK", "HDFC", "ICICIBANK", "KOTAKBANK",
+            "AXISBANK", "SBIN", "ITC", "LT", "BAJFINANCE", "BHARTIARTL", "ASIANPAINT",
+            "HINDUNILVR", "MARUTI", "TITAN", "SUNPHARMA", "TATAMOTORS", "WIPRO",
+            "ONGC", "POWERGRID", "NTPC", "ULTRACEMCO", "M&M", "BAJAJ-AUTO", "NESTLE",
+            "TECHM", "HCLTECH", "DRREDDY", "BRITANNIA", "DIVISLAB", "EICHERMOT",
+            "GRASIM", "JSWSTEEL", "TATASTEEL", "ADANIPORTS", "IOC", "BPCL", "HINDALCO",
+            "COALINDIA", "VEDANTA", "SHREECEM", "UPL", "ZEEL"
+        ]
+        
+        known_indian_indices = [
+            "NIFTY", "BANKNIFTY", "SENSEX", "NIFTY50", "NIFTYBANK", "NIFTYIT",
+            "NIFTYMIDCAP", "NIFTYSMALLCAP", "SENSEX30", "BSE500"
+        ]
+        
+        # Check if it's a known Indian stock
+        if base_symbol in known_indian_stocks:
+            return True
+        
+        # Check if it's a known Indian index
+        if base_symbol in known_indian_indices:
+            return True
+        
+        # Check by pattern (NSE format)
+        if symbol.startswith("NSE:") or symbol.startswith("BSE:"):
+            return True
+        
+        # Check by suffix
+        if any(symbol.endswith(suffix) for suffix in suffixes_to_remove):
+            return True
+        
+        # Check if it looks like an NSE/BSE symbol (typically short, alphanumeric)
+        if 2 <= len(base_symbol) <= 20 and base_symbol.isalnum():
+            # Could be Indian, check with additional patterns
+            if base_symbol.isalpha() and base_symbol.isupper():
+                # All caps alphabetic - likely Indian stock code
+                return True
+        
+        # Default to not Indian
+        return False
     
     def fetch_market_data(self, symbol: str, source: str = "auto", 
                           interval: str = "1d") -> Optional[Dict]:
         """
         Unified method to fetch market data from any source
-        
-        Args:
-            symbol: Stock/Index symbol
-            source: "auto", "yfinance", "fyers"
-            interval: "1d", "1h", "5min", etc.
-        
-        Returns:
-            Dict with market data or None
         """
-        # Clean symbol
+        symbol = symbol.replace(".NS", "").replace("^", "")
         symbol = symbol.strip().upper()
-        
+
+        # >>> FIX START: explicit source handling (ONLY CHANGE)
+        if source == "upstox":
+            return self.fetch_upstox(symbol)
+
+        if source == "fyers":
+            return self._fetch_unified_fyers(symbol, interval)
+
+        if source == "yfinance":
+            period = "5d" if interval in ["1min", "5min"] else "1mo"
+            return self.fetch_yfinance(symbol, period=period, interval=interval)
+        # <<< FIX END
+
         # Auto-select source
         if source == "auto":
-            # Check if symbol is Indian
-            is_indian = any(indicator in symbol for indicator in 
-                          ["NIFTY", "BANKNIFTY", "-EQ", "SENSEX", ".NS"])
-            
-            if is_indian and any(s in self.sources for s in ["fyers_new", "fyers_legacy"]):
-                # Try Fyers for Indian symbols
-                data = self._fetch_unified_fyers(symbol, interval)
+            # Use the new smart source selection
+            order = self.choose_data_source(symbol, interval)
+
+            for src in order:
+                if src == "upstox":
+                    data = self.fetch_upstox(symbol)
+                elif src == "fyers":
+                    data = self._fetch_unified_fyers(symbol, interval)
+                elif src == "yfinance":
+                    period = "5d" if interval in ["1min", "5min"] else "1mo"
+                    data = self.fetch_yfinance(symbol, period=period, interval=interval)
+                else:
+                    data = None
+
                 if data:
                     return data
-                
-                # Fallback to yfinance with .NS suffix
-                if "yfinance" in self.sources:
-                    if not symbol.endswith(".NS") and "-INDEX" not in symbol:
-                        symbol = symbol.replace("-EQ", "") + ".NS"
-                    return self.fetch_yfinance(symbol, interval=interval)
-            
-            # For non-Indian symbols or if Fyers fails
-            if "yfinance" in self.sources:
-                return self.fetch_yfinance(symbol, interval=interval)
-        
-        elif source == "yfinance" and "yfinance" in self.sources:
-            return self.fetch_yfinance(symbol, interval=interval)
-        
-        elif source == "fyers":
-            return self._fetch_unified_fyers(symbol, interval)
-        
-        print(f"⚠️ No data source available for {symbol}")
-        return None
-    
+
+            print(f"⚠️ All data sources failed for {symbol}")
+            return None
+
+
     def _fetch_unified_fyers(self, symbol: str, interval: str = "D") -> Optional[Dict]:
         """Try multiple Fyers integrations"""
         # Map interval for Fyers
@@ -438,31 +540,12 @@ class MinimalMarketPipeline:
         }
         fyers_interval = interval_map.get(interval, "D")
         
-        # First try new Fyers integration if available
-        if "fyers_new" in self.sources:
-            try:
-                from auth.fyers_provider import FyersDataProvider
-                provider = FyersDataProvider()
-                if provider.is_available():
-                    quote = provider.get_quote(symbol)
-                    if quote:
-                        return {
-                            "symbol": symbol,
-                            "source": "fyers_new",
-                            "interval": interval,
-                            "data": [],  # Historical data not available
-                            "latest_price": quote.get("price", 0),
-                            "record_count": 0,
-                            "quote": quote,
-                            "currency": "INR"
-                        }
-            except Exception as e:
-                print(f"New Fyers integration failed: {e}")
         
         # Fallback to legacy SDK
         if "fyers_legacy" in self.sources:
             return self.fetch_fyers(symbol, fyers_interval)
-        
+    
+        print("⚠️ Fyers integration not available")
         return None
     
     def get_live_price(self, symbol: str) -> Optional[float]:

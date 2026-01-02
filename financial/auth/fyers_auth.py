@@ -110,6 +110,21 @@ class FyersAuth:
             "Content-Type": "application/json"
         })
         return session
+    
+    def is_broker_online(self) -> bool:
+        """
+        Check if FYERS auth gateway is reachable.
+        503 means broker is temporarily down.
+        """
+        try:
+            r = requests.get(
+                f"{self.config.AUTH_BASE}/profile",
+                timeout=3
+            )
+            return r.status_code != 503
+        except Exception:
+            return False
+
 
     def is_authenticated(self) -> bool:
         return self.get_access_token() is not None
