@@ -17,7 +17,7 @@ class FinancialTools:
             from main import enhanced_get_market_data  # Import from your main.py
             
             # Get recent data
-            data = enhanced_get_market_data(symbol, timeframe="5d", interval="1d")
+            data = enhanced_get_market_data(symbol, timeframe="5d")  # FIXED: removed interval
             
             if data.get('status') != 'ok':
                 return f"Could not fetch data for {symbol}"
@@ -51,6 +51,8 @@ class FinancialTools:
     @staticmethod
     def get_portfolio_snapshot(symbols):
         """Get snapshot of multiple symbols"""
+        from main import enhanced_get_market_data  # FIXED: added import
+        
         snapshot = {}
         
         for symbol in symbols:
@@ -58,9 +60,9 @@ class FinancialTools:
                 data = enhanced_get_market_data(symbol, timeframe="1d")
                 if data.get('status') == 'ok':
                     snapshot[symbol] = {
-                        'price': data.get('price', 0),
-                        'source': data.get('source', 'unknown'),
-                        'timestamp': data.get('timestamp', datetime.now().isoformat())
+                    'price': data.get('price', 0),
+                    'source': data.get('source', 'unknown'),
+                    'timestamp': data.get('timestamp', datetime.now().isoformat())
                     }
             except:
                 continue
@@ -75,7 +77,7 @@ class FinancialTools:
         
         insight = f"""
 📊 MARKET INSIGHT: {symbol}
-────────────────────
+────
 Price: ₹{data.get('price', 0):.2f}
 Open: ₹{data.get('open', 0):.2f}
 High: ₹{data.get('high', 0):.2f}  

@@ -350,26 +350,8 @@ def get_market_data(symbol, timeframe="1d"):
     # If enhanced pipeline is available, use it
     if MARKET_PIPELINE_AVAILABLE and market_pipeline:
         try:
-            # Map timeframe to period/interval for yfinance
-            if timeframe in ["1min", "5min", "15min", "30min", "1h"]:
-                # For intraday, use 1d period with specific interval
-                interval = timeframe
-                if timeframe == "1h":
-                    interval = "60min"
-                # Call pipeline - it will handle the conversion
-                data = market_pipeline.fetch_market_data(symbol, source="auto")
-            else:
-                # For daily/weekly/monthly
-                period_map = {
-                    "1d": "1d",
-                    "1w": "5d",  # 5 days for weekly view
-                    "1M": "1mo"
-                }
-                period = period_map.get(timeframe, "1d")
-                interval = "1d"
-                
-                # For now, use auto source - pipeline handles yfinance/fyers
-                data = market_pipeline.fetch_market_data(symbol, source="auto")
+            # Call pipeline WITHOUT interval parameter
+            data = market_pipeline.fetch_market_data(symbol, source="auto")
             
             if not data:
                 return None, "pipeline", "no_data"
@@ -406,7 +388,7 @@ def get_market_data(symbol, timeframe="1d"):
         
         # Map timeframe to yfinance parameters
         period_map = {
-            "1min": "1d",  # 1 day of 1min data
+            "1min": "1d",
             "5min": "5d",
             "15min": "5d",
             "30min": "5d",
