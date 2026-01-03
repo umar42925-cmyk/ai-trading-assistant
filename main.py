@@ -725,38 +725,44 @@ Operational Rules:
 FINANCIAL_INTELLIGENCE = """
 FINANCIAL ANALYSIS PROTOCOL:
 
-When users ask for financial/stock analysis:
+**YOU ARE ALREADY CONNECTED TO FINANCIAL TOOLS - USE THEM!**
 
-1. **DEFAULT TO COMPREHENSIVE ANALYSIS** when users ask for:
-   - "analysis", "report", "technical analysis", "overview"
-   - "comprehensive", "full", "detailed", "complete analysis"
-   - "analyze [stock]", "what about [stock]", "show me [stock]"
+When users ask financial questions, you MUST understand:
 
-2. **USE FINANCIAL TOOLS INTELLIGENTLY:**
-   - generate_comprehensive_report() → Complete analysis with ALL metrics
-   - analyze_stock_for_agent() → Quick overview only
-   - Technical indicators via dedicated functions
+1. **FINANCIAL TOOLS ARE ALWAYS AVAILABLE:**
+   - You have access to generate_comprehensive_report()
+   - You have access to calculate_rsi(), calculate_moving_averages()
+   - You have access to real-time market data
+   - **NEVER say "I don't have access to real-time data"**
 
-3. **UNDERSTAND CONTEXT IN CONVERSATIONS:**
-   - If follow-up question: "What about RSI?" → Show just RSI
-   - If comparison: "Compare X and Y" → Use comparison functions
-   - If specific: "Only volatility" → Show just volatility
+2. **CONTEXT AWARENESS:**
+   - If user previously asked about INFY, and now asks "What about RSI?", they mean INFY's RSI
+   - If user asks "Compare with TCS", they mean compare the last symbol with TCS
+   - **The system tracks context automatically - use it**
 
-4. **ALWAYS INCLUDE REAL-TIME DATA INFO:**
-   - Show current price and source (yfinance/Upstox)
-   - Mention data quality and latency
-   - Indicate if data is real-time or delayed
+3. **DEFAULT BEHAVIOR:**
+   - "Analyze [STOCK]" → Use generate_comprehensive_report()
+   - "Technical analysis of [STOCK]" → Use generate_comprehensive_report()
+   - "What's the RSI?" → Use calculate_rsi() on last discussed symbol
+   - "Price of [STOCK]" → Quick price fetch
 
-5. **PRACTICAL EXAMPLES:**
-   User: "Analyze INFY" → Use generate_comprehensive_report("INFY")
-   User: "What's INFY price?" → Use basic price function
-   User: "RSI of INFY?" → Use calculate_rsi("INFY") only
-   User: "Compare INFY and TCS" → Use comparison function
+4. **RESPONSE STYLE:**
+   - Be direct: "INFY RSI is 61.2 - Neutral"
+   - Include interpretation: "This suggests healthy momentum"
+   - Add context: "Current price: ₹1640.40"
+   - **Never apologize for not having data - you DO have it**
 
-6. **AVOID FUNDAMENTAL ANALYSIS UNLESS ASKED:**
-   - Default to TECHNICAL analysis
-   - Only provide company/fundamental info if explicitly requested
-   - Focus on real-time market data from your pipeline
+5. **PROHIBITED RESPONSES:**
+   - ❌ "I don't have access to real-time data"
+   - ❌ "I cannot provide current market data"
+   - ❌ "I'm unable to fetch live prices"
+   - ✅ Instead: Just provide the analysis
+
+6. **WHEN YOU DON'T UNDERSTAND:**
+   - Ask for clarification: "Which stock would you like me to analyze?"
+   - Don't say you can't do it - you can
+
+**REMEMBER: The financial routing system handles data fetching automatically. You just need to understand what the user wants and provide intelligent responses.**
 """
 
 MEMORY_POLICY = """
@@ -967,9 +973,18 @@ client = OpenAI(
 # CORE LLM FUNCTIONS
 # ================================
 def routellm_think(user_input, working_memory, core_identity, conversation_history=None):
-    """Main LLM reasoning function."""
+    """Main LLM reasoning function with financial awareness."""
+    
+    # Get financial context if available
+    financial_context = ""
+    if 'financial_context' in st.session_state and st.session_state.financial_context:
+        last_symbol = st.session_state.financial_context.get('last_symbol')
+        if last_symbol:
+            financial_context = f"\n\nCONTEXT: User was previously discussing {last_symbol}. If they ask follow-up questions about technical indicators without specifying a symbol, assume they mean {last_symbol}."
+    
     messages = [
         {"role": "system", "content": AGENT_CONSTITUTION.strip()},
+        {"role": "system", "content": FINANCIAL_INTELLIGENCE.strip() + financial_context},
         {"role": "system", "content": MEMORY_POLICY.strip()},
         {
             "role": "system",
@@ -985,7 +1000,8 @@ def routellm_think(user_input, working_memory, core_identity, conversation_histo
     
     # Add conversation history
     if conversation_history:
-        messages.extend(conversation_history)
+        # Only keep last 10 messages to avoid token limits
+        messages.extend(conversation_history[-10:])
     
     # Add current user message
     messages.append({"role": "user", "content": user_input})
@@ -998,11 +1014,9 @@ def routellm_think(user_input, working_memory, core_identity, conversation_histo
         )
         return resp.choices[0].message.content
     except Exception as e:
-        # Improved error handling
         error_msg = str(e)
         print(f"LLM Error: {error_msg}")
         
-        # Check for specific error types
         if "rate limit" in error_msg.lower():
             return "I'm currently rate-limited. Please try again in a moment."
         elif "authentication" in error_msg.lower() or "api key" in error_msg.lower():
@@ -1233,37 +1247,20 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
             "mode": current_mode
         }
     
-    # Extract financial intent
-    fin_intent = extract_financial_intent(user_input)
-    
-    intent_type = fin_intent.get("intent")
-    print(f"🔍 Handling financial intent: {intent_type}")  # Debug
-    
-    # UPDATE CONTEXT
+    # Initialize context if not exists
     if 'financial_context' not in st.session_state:
         st.session_state.financial_context = {}
     
-    # Save the symbol/indicators for follow-up queries
-    if intent_type == "technical_analysis":
-        symbol = fin_intent.get("symbol")
-        indicators = fin_intent.get("indicators", [])
-        if symbol:
-            st.session_state.financial_context['last_symbol'] = symbol
-            st.session_state.financial_context['last_intent'] = intent_type
-            st.session_state.financial_context['last_indicators'] = indicators
+    # Extract financial intent
+    fin_intent = extract_financial_intent(user_input)
+    intent_type = fin_intent.get("intent")
     
-    elif intent_type == "comprehensive_report":
-        symbol = fin_intent.get("symbol")
-        if symbol:
-            st.session_state.financial_context['last_symbol'] = symbol
-            st.session_state.financial_context['last_intent'] = intent_type
-    
-    elif intent_type == "comparison":
-        symbols = fin_intent.get("symbols", [])
-        if symbols:
-            # Save the last symbol for future comparisons
-            st.session_state.financial_context['last_symbol'] = symbols[0] if symbols else None
-            st.session_state.financial_context['last_intent'] = intent_type
+    # ALWAYS save symbol context for ALL financial queries
+    symbol = fin_intent.get("symbol")
+    if symbol:
+        st.session_state.financial_context['last_symbol'] = symbol
+        st.session_state.financial_context['last_intent'] = intent_type
+        print(f"💾 Saved context: {symbol}")  # Debug
     
     # Route to appropriate handler
     if intent_type == "basic_price":
@@ -1383,6 +1380,8 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
             "status": UI_STATUS,
             "mode": current_mode
         }
+    if symbol:
+        st.session_state.financial_context['last_symbol'] = symbol
     
     # If no handler matched, return None to fall through to main LLM
     return None
