@@ -139,11 +139,11 @@ class FinancialTools:
     """
     
     # ========================================================================
-    # MULTI-TIMEFRAME ANALYSIS
+    # MULTI-TIMEFRAME ANALYSIS - FIXED VERSION
     # ========================================================================
-    
+
     def _get_multi_timeframe_summary(self, symbol: str) -> str:
-        """Get multi-timeframe momentum summary"""
+        """Get multi-timeframe momentum summary - FIXED"""
         try:
             if not self.pipeline:
                 return ""
@@ -163,55 +163,175 @@ class FinancialTools:
             
             for tf, data in mtf_data.items():
                 if data.data and len(data.data) >= 2:
-                    closes = [bar['close'] for bar in data.data]
-                    if len(closes) >= 2:
-                        change = ((closes[-1] - closes[0]) / closes[0]) * 100
-                        trend = "📈 Bullish" if change > 0 else "📉 Bearish"
-                        summary.append(f"  {tf}: {trend} ({change:+.2f}%)")
+                    # Get appropriate number of bars for the timeframe
+                    if tf == '1h':
+                        # For hourly: use last 24 hours for change calculation
+                        # Compare current hour with same hour yesterday
+                        if len(data.data) >= 25:  # Need at least 25 hours for 24h change
+                            current_close = data.data[-1]['close']
+                            previous_close = data.data[-25]['close']  # 24 hours ago
+                            timeframe_label = "24h"
+                        else:
+                            # Fallback: use last 2 bars
+                            current_close = data.data[-1]['close']
+                            previous_close = data.data[-2]['close']
+                            timeframe_label = "1h"
+                            
+                    elif tf == '1d':
+                        # For daily: use proper daily returns
+                        # Need at least 2 days of data
+                        if len(data.data) >= 2:
+                            current_close = data.data[-1]['close']
+                            previous_close = data.data[-2]['close']
+                            timeframe_label = "1d"
+                        else:
+                            continue
+                    else:
+                        # For other timeframes
+                        current_close = data.data[-1]['close']
+                        previous_close = data.data[-2]['close']
+                        timeframe_label = tf
+                    
+                    # Calculate percentage change safely
+                    if previous_close > 0:
+                        change = ((current_close - previous_close) / previous_close) * 100
+                    else:
+                        change = 0
+                    
+                    # Format with reasonable limits
+                    if abs(change) > 10000:  # Catch crazy values
+                        print(f"⚠️ Suspicious change for {symbol} {tf}: {change:.2f}%")
+                        # Use a more reasonable calculation
+                        if len(data.data) >= 10:
+                            recent_avg = np.mean([bar['close'] for bar in data.data[-10:-5]])
+                            current_avg = np.mean([bar['close'] for bar in data.data[-5:]])
+                            if recent_avg > 0:
+                                change = ((current_avg - recent_avg) / recent_avg) * 100
+                            else:
+                                change = 0
+                    
+                    trend = "📈 Bullish" if change > 0 else "📉 Bearish"
+                    summary.append(f"  {tf} ({timeframe_label}): {trend} ({change:+.2f}%)")
             
             return "\n".join(summary) if len(summary) > 1 else ""
             
         except Exception as e:
+            print(f"⚠️ Multi-timeframe error for {symbol}: {str(e)[:50]}")
             return ""
     
     # ========================================================================
-    # VOLUME PROFILE ANALYSIS
+    # VOLUME PROFILE ANALYSIS - FIXED VERSION
     # ========================================================================
-    
+
     def _get_volume_profile_summary(self, symbol: str) -> str:
-        """Get volume profile summary with key levels"""
+        """Get volume profile summary with key levels - FIXED"""
         try:
             if not self.pipeline:
                 return ""
             
-            # Calculate volume profile
-            vp = self.pipeline.calculate_volume_profile(symbol)
+            # IMPORTANT: Use yfinance for volume profile as it has historical intraday data
+            # Upstox only provides current price, not historical intraday data
             
-            if not vp:
-                return ""
+            print(f"📊 Calculating Volume Profile for {symbol} using yfinance...")
+            
+            # First try with yfinance for proper intraday data
+            vp_data = None
+            for interval in ['5m', '15m', '30m', '1h']:
+                try:
+                    vp_data = self.pipeline.fetch_market_data(
+                        symbol=symbol,
+                        interval=interval,
+                        source='yfinance',  # Force yfinance
+                        validate=False,
+                        max_retries=2
+                    )
+                    if vp_data and vp_data.data and len(vp_data.data) > 10:
+                        print(f"   Using {interval} data: {len(vp_data.data)} bars")
+                        break
+                except Exception as e:
+                    continue
+            
+            if not vp_data or not vp_data.data or len(vp_data.data) < 10:
+                print(f"   ⚠️ Not enough intraday data for volume profile")
+                return "Volume Profile: 🔴 Insufficient intraday data"
+            
+            # Calculate volume profile from the data
+            price_levels = {}
+            total_volume = 0
+            
+            for bar in vp_data.data:
+                if 'close' in bar and 'volume' in bar:
+                    # Round to appropriate precision
+                    price = round(bar['close'], 2)
+                    volume = bar['volume']
+                    
+                    if price in price_levels:
+                        price_levels[price] += volume
+                    else:
+                        price_levels[price] = volume
+                    
+                    total_volume += volume
+            
+            if not price_levels:
+                return "Volume Profile: 🔴 No valid price-volume data"
+            
+            # Find POC (Point of Control) - price with highest volume
+            poc = max(price_levels.items(), key=lambda x: x[1])[0]
+            
+            # Calculate Value Area (70% of volume)
+            # Sort price levels by volume descending
+            sorted_levels = sorted(price_levels.items(), key=lambda x: x[1], reverse=True)
+            
+            value_area_volume = total_volume * 0.70  # 70% of total volume
+            cumulative_vol = 0
+            va_prices = []
+            
+            for price, volume in sorted_levels:
+                va_prices.append(price)
+                cumulative_vol += volume
+                if cumulative_vol >= value_area_volume:
+                    break
+            
+            vah = max(va_prices) if va_prices else poc
+            val = min(va_prices) if va_prices else poc
             
             summary = [
                 "Volume Profile:",
-                f"  POC (Point of Control): ₹{vp.poc:.2f}",
-                f"  VAH (Value Area High): ₹{vp.vah:.2f}",
-                f"  VAL (Value Area Low): ₹{vp.val:.2f}",
+                f"  POC (Point of Control): ₹{poc:.2f}",
+                f"  VAH (Value Area High): ₹{vah:.2f}",
+                f"  VAL (Value Area Low): ₹{val:.2f}",
             ]
             
-            # Interpret position relative to POC
-            current_price = self.pipeline.fetch_market_data(symbol, interval='1d')
-            if current_price and current_price.latest_price:
-                price = current_price.latest_price
-                if price > vp.vah:
+            # Get current price for interpretation
+            current_price_data = self.pipeline.fetch_market_data(symbol, interval='1d')
+            if current_price_data and current_price_data.latest_price:
+                current_price = current_price_data.latest_price
+                
+                # Interpret position relative to value area
+                if current_price > vah:
                     summary.append("  🔴 Price above value area - potential resistance")
-                elif price < vp.val:
+                    summary.append(f"     (Current: ₹{current_price:.2f} vs VAH: ₹{vah:.2f})")
+                elif current_price < val:
                     summary.append("  🟢 Price below value area - potential support")
+                    summary.append(f"     (Current: ₹{current_price:.2f} vs VAL: ₹{val:.2f})")
                 else:
                     summary.append("  🟡 Price within value area - fair value zone")
+                    summary.append(f"     (Range: ₹{val:.2f} - ₹{vah:.2f})")
+                
+                # Show relation to POC
+                poc_distance_pct = ((current_price - poc) / poc) * 100
+                if abs(poc_distance_pct) > 2:
+                    summary.append(f"  📍 {abs(poc_distance_pct):.1f}% {'above' if poc_distance_pct > 0 else 'below'} POC")
+            
+            # Add data quality info
+            summary.append(f"  📊 Based on {len(vp_data.data)} intraday bars, {len(price_levels)} price levels")
             
             return "\n".join(summary)
             
         except Exception as e:
-            return ""
+            error_msg = str(e)[:80]
+            print(f"❌ Volume profile error for {symbol}: {error_msg}")
+            return f"Volume Profile: ⚠️ Error: {error_msg}"
     
     # ========================================================================
     # PORTFOLIO ANALYSIS
@@ -389,7 +509,7 @@ Source: {data.get('source', 'unknown')}
     # ========================================================================
     
     def calculate_volatility(self, symbol: str, period: int = 20) -> Optional[float]:
-        """Calculate historical volatility (annualized)"""
+        """Calculate historical volatility - consistent implementation"""
         try:
             if not self.pipeline:
                 return None
@@ -399,19 +519,31 @@ Source: {data.get('source', 'unknown')}
             if not data or not data.data or len(data.data) < period:
                 return None
             
+            # Get closes for the period
             closes = [bar['close'] for bar in data.data[-period:]]
-            returns = np.diff(np.log(closes))
+            
+            # Calculate daily returns
+            returns = []
+            for i in range(1, len(closes)):
+                daily_return = (closes[i] - closes[i-1]) / closes[i-1]
+                returns.append(daily_return)
+            
+            # Calculate standard deviation of returns
+            if len(returns) < 2:
+                return None
+            
+            daily_volatility = np.std(returns)
             
             # Annualize (252 trading days)
-            volatility = np.std(returns) * np.sqrt(252) * 100
+            annual_volatility = daily_volatility * np.sqrt(252) * 100
             
-            return volatility
+            return annual_volatility
             
         except Exception as e:
             return None
     
     def calculate_sharpe_ratio(self, symbol: str, risk_free_rate: float = 0.05) -> Optional[float]:
-        """Calculate Sharpe ratio"""
+        """Calculate Sharpe ratio correctly"""
         try:
             if not self.pipeline:
                 return None
@@ -422,16 +554,28 @@ Source: {data.get('source', 'unknown')}
                 return None
             
             closes = [bar['close'] for bar in data.data]
-            returns = np.diff(closes) / closes[:-1]
             
-            # Annualize
-            avg_return = np.mean(returns) * 252
-            std_return = np.std(returns) * np.sqrt(252)
+            # Calculate daily returns correctly
+            returns = []
+            for i in range(1, len(closes)):
+                daily_return = (closes[i] - closes[i-1]) / closes[i-1]
+                returns.append(daily_return)
             
-            if std_return == 0:
+            if len(returns) < 2:
                 return None
             
-            sharpe = (avg_return - risk_free_rate) / std_return
+            # Annualize
+            avg_daily_return = np.mean(returns)
+            std_daily_return = np.std(returns)
+            
+            # Annualize assuming 252 trading days
+            avg_annual_return = avg_daily_return * 252
+            std_annual_return = std_daily_return * np.sqrt(252)
+            
+            if std_annual_return == 0:
+                return None
+            
+            sharpe = (avg_annual_return - risk_free_rate) / std_annual_return
             
             return sharpe
             

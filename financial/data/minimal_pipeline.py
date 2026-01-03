@@ -181,50 +181,50 @@ class MinimalMarketPipeline:
             print(f"Upstox error for {symbol}: {type(e).__name__}: {str(e)[:100]}")
             return None
 
-    def _format_upstox_symbol(self, symbol: str) -> str:
-        """Convert symbol to Upstox format - IMPROVED"""
+    def _format_upstox_symbol(self, symbol: str) -> Optional[str]:
+        """Format symbol for Upstox - SIMPLIFIED WORKING VERSION"""
         symbol = symbol.upper().strip()
         
-        # Remove Yahoo prefix
-        if symbol.startswith("^"):
-            symbol = symbol[1:]
-        
-        # Remove .NS suffix
+        # Remove common suffixes
         if symbol.endswith(".NS"):
             symbol = symbol[:-3]
-        
-        # Remove -EQ, -INDEX suffixes
-        if symbol.endswith("-EQ"):
+        elif symbol.endswith("-EQ"):
             symbol = symbol[:-3]
         elif symbol.endswith("-INDEX"):
             symbol = symbol[:-6]
         
-        # Special mappings
-        upstox_map = {
+        print(f"   🔍 Formatting {symbol} for Upstox...")
+        
+        # SIMPLIFIED MAPPING - Use only exchange:instrument_key format
+        simple_map = {
             'NIFTY': 'NSE_INDEX|Nifty 50',
             'BANKNIFTY': 'NSE_INDEX|Nifty Bank',
             'SENSEX': 'BSE_INDEX|SENSEX',
-            'NSEI': 'NSE_INDEX|Nifty 50',  # Yahoo's NSEI
-            'NSEBANK': 'NSE_INDEX|Nifty Bank',  # Yahoo's NSEBANK
-            'BSESN': 'BSE_INDEX|SENSEX',  # Yahoo's BSESN
-            'RELIANCE': 'NSE_EQ|INE002A01018',
-            'TCS': 'NSE_EQ|INE467B01029',
-            'INFY': 'NSE_EQ|INE009A01021',
-            'HDFCBANK': 'NSE_EQ|INE040A01026',
-            'ICICIBANK': 'NSE_EQ|INE090A01021',
-            'AAPL': None,  # Skip - not available on Upstox
-            'TSLA': None,  # Skip - not available on Upstox
-            'GOOGL': None,  # Skip - not available on Upstox
+            
+            # Common Indian stocks - use symbol without ISIN
+            'RELIANCE': 'NSE_EQ|RELIANCE',
+            'TCS': 'NSE_EQ|TCS',
+            'INFY': 'NSE_EQ|INFOSYS',  # Note: INFY is INFOSYS on NSE
+            'HDFCBANK': 'NSE_EQ|HDFCBANK',
+            'ICICIBANK': 'NSE_EQ|ICICIBANK',
+            'SBIN': 'NSE_EQ|SBIN',
+            'WIPRO': 'NSE_EQ|WIPRO',
         }
         
-        if symbol in upstox_map:
-            return upstox_map[symbol]
+        if symbol in simple_map:
+            result = simple_map[symbol]
+            print(f"   📍 Mapped to: {result}")
+            return result
         
-        # Default to NSE equity for Indian symbols, None for others
+        # For other symbols, try NSE equity format
         if self._is_indian_symbol(symbol):
-            return f'NSE_EQ|{symbol}'
-        else:
-            return None  # Skip Upstox for non-Indian symbols
+            # Try NSE_EQ|SYMBOL format (Upstox basic format)
+            result = f'NSE_EQ|{symbol}'
+            print(f"   📍 Trying NSE format: {result}")
+            return result
+        
+        print(f"   ⚠️ Not an Indian symbol or not available on Upstox")
+        return None
     
     # ==================== YAHOO FINANCE ====================
     

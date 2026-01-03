@@ -279,6 +279,13 @@ if "conversation_history" not in st.session_state:
 
 if "show_upstox_auth" not in st.session_state:
     st.session_state.show_upstox_auth = False
+    
+if 'financial_context' not in st.session_state:
+    st.session_state.financial_context = {
+        'last_symbol': None,
+        'last_intent': None,
+        'last_indicators': []
+    }
 
 # --------------------------------------------------
 # Handle Upstox authentication page

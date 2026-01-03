@@ -671,75 +671,84 @@ class ProfessionalMarketPipeline:
 
     def calculate_volume_profile(self, symbol: str, date: str = None) -> VolumeProfile:
         """
-        Calculate Volume Profile with POC, VAH, VAL
-
-        Args:
-            symbol: Stock symbol
-            date: Date (YYYY-MM-DD) or None for today
-
-        Returns:
-            VolumeProfile object
+        Calculate Volume Profile with POC, VAH, VAL - FIXED VERSION
+        
+        Uses yfinance for proper intraday data instead of Upstox real-time only data
         """
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
-
-        # Fetch intraday data
-        data = self.fetch_market_data(symbol, interval='5m', source='auto')
-
-        if not data or not data.data:
-            print(f"⚠️ No data for volume profile")
+        
+        # Try multiple intervals to get sufficient data
+        intervals_to_try = ['5m', '15m', '30m', '1h']
+        
+        for interval in intervals_to_try:
+            print(f"   🔍 Trying {interval} data for volume profile...")
+            
+            # Use yfinance for historical intraday data
+            data = self.fetch_market_data(symbol, interval=interval, source='yfinance')
+            
+            if data and data.data and len(data.data) >= 20:  # Need at least 20 bars
+                print(f"   ✅ Using {interval} data: {len(data.data)} bars")
+                break
+            else:
+                print(f"   ⚠️ {interval}: {len(data.data) if data and data.data else 0} bars")
+        
+        if not data or not data.data or len(data.data) < 10:
+            print(f"   ❌ Insufficient data for volume profile ({len(data.data) if data and data.data else 0} bars)")
             return None
-
+        
         # Build price-volume histogram
         price_levels = defaultdict(int)
         total_volume = 0
-
+        
         for bar in data.data:
-            # Use close price as representative
-            price = round(bar['close'], 2)
-            volume = bar.get('volume', 0)
-            price_levels[price] += volume
-            total_volume += volume
-
+            if 'close' in bar and 'volume' in bar:
+                price = round(bar['close'], 2)
+                volume = bar['volume']
+                price_levels[price] += volume
+                total_volume += volume
+        
         if not price_levels:
+            print("   ❌ No price-volume data")
             return None
-
+        
+        print(f"   📊 Found {len(price_levels)} price levels, total volume: {total_volume:,}")
+        
         # Find POC (Point of Control) - price with highest volume
-        poc = max(price_levels.items(), key=lambda x: x[1])[0]
-
+        poc_price, poc_volume = max(price_levels.items(), key=lambda x: x[1])
+        print(f"   📍 POC: ₹{poc_price:.2f} (volume: {poc_volume:,})")
+        
         # Calculate Value Area (70% of volume)
         sorted_levels = sorted(price_levels.items(), key=lambda x: x[1], reverse=True)
         value_area_volume = total_volume * 0.70
-
+        
         va_prices = []
         cumulative_vol = 0
-        for price, vol in sorted_levels:
+        
+        for price, volume in sorted_levels:
             va_prices.append(price)
-            cumulative_vol += vol
+            cumulative_vol += volume
             if cumulative_vol >= value_area_volume:
                 break
-
-        vah = max(va_prices) if va_prices else poc
-        val = min(va_prices) if va_prices else poc
-
+        
+        vah = max(va_prices) if va_prices else poc_price
+        val = min(va_prices) if va_prices else poc_price
+        
+        print(f"   📊 Value Area: ₹{val:.2f} - ₹{vah:.2f} (covers {cumulative_vol/total_volume*100:.1f}% of volume)")
+        
         profile = VolumeProfile(
             symbol=symbol,
             timestamp=date,
-            poc=poc,
+            poc=poc_price,
             vah=vah,
             val=val,
             total_volume=total_volume,
             price_levels=dict(price_levels)
         )
-
+        
         # Store in database
         self._store_volume_profile(profile)
-
-        print(f"📊 Volume Profile for {symbol}:")
-        print(f"   POC: {poc:.2f}")
-        print(f"   VAH: {vah:.2f}")
-        print(f"   VAL: {val:.2f}")
-
+        
         return profile
 
     def calculate_vwap(self, symbol: str, interval: str = '5m') -> float:

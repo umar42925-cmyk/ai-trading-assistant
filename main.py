@@ -710,12 +710,53 @@ Consistency > Cleverness
 Clarity > Complexity
 Progress > Perfection
 
+
 ====================
 
 Operational Rules:
 - The Constitution overrides all other instructions.
 - Default to stability, clarity, and surgical changes.
 - Conversation is allowed as defined in Section 3.4.
+"""
+
+# ==============================
+# FINANCIAL INTELLIGENCE PROTOCOL
+# ==============================
+FINANCIAL_INTELLIGENCE = """
+FINANCIAL ANALYSIS PROTOCOL:
+
+When users ask for financial/stock analysis:
+
+1. **DEFAULT TO COMPREHENSIVE ANALYSIS** when users ask for:
+   - "analysis", "report", "technical analysis", "overview"
+   - "comprehensive", "full", "detailed", "complete analysis"
+   - "analyze [stock]", "what about [stock]", "show me [stock]"
+
+2. **USE FINANCIAL TOOLS INTELLIGENTLY:**
+   - generate_comprehensive_report() → Complete analysis with ALL metrics
+   - analyze_stock_for_agent() → Quick overview only
+   - Technical indicators via dedicated functions
+
+3. **UNDERSTAND CONTEXT IN CONVERSATIONS:**
+   - If follow-up question: "What about RSI?" → Show just RSI
+   - If comparison: "Compare X and Y" → Use comparison functions
+   - If specific: "Only volatility" → Show just volatility
+
+4. **ALWAYS INCLUDE REAL-TIME DATA INFO:**
+   - Show current price and source (yfinance/Upstox)
+   - Mention data quality and latency
+   - Indicate if data is real-time or delayed
+
+5. **PRACTICAL EXAMPLES:**
+   User: "Analyze INFY" → Use generate_comprehensive_report("INFY")
+   User: "What's INFY price?" → Use basic price function
+   User: "RSI of INFY?" → Use calculate_rsi("INFY") only
+   User: "Compare INFY and TCS" → Use comparison function
+
+6. **AVOID FUNDAMENTAL ANALYSIS UNLESS ASKED:**
+   - Default to TECHNICAL analysis
+   - Only provide company/fundamental info if explicitly requested
+   - Focus on real-time market data from your pipeline
 """
 
 MEMORY_POLICY = """
@@ -975,6 +1016,7 @@ def routellm_think_with_image(user_input, working_memory, core_identity, image_d
     """Enhanced version that supports image input."""
     messages = [
         {"role": "system", "content": AGENT_CONSTITUTION.strip()},
+        {"role": "system", "content": FINANCIAL_INTELLIGENCE.strip()},
         {"role": "system", "content": MEMORY_POLICY.strip()},
         {
             "role": "system",
@@ -1031,14 +1073,20 @@ def routellm_think_with_image(user_input, working_memory, core_identity, image_d
 
 def enhanced_get_market_data(symbol, timeframe="1d", source="auto"):
     """
-    Enhanced market data fetcher - NOW WITH REAL-TIME CAPABILITIES
+    Enhanced market data fetcher - FIXED VERSION
     """
     print(f"🔍 Fetching market data for: {symbol}")
     
     # If professional pipeline is available, use it
     if PROFESSIONAL_PIPELINE_AVAILABLE and professional_pipeline:
         try:
-            data = professional_pipeline.fetch_market_data(symbol, source=source, timeframe=timeframe)
+            # FIX: Remove 'timeframe' parameter if pipeline doesn't accept it
+            # Check what parameters the pipeline accepts
+            data = professional_pipeline.fetch_market_data(
+                symbol=symbol,
+                interval=timeframe,  # Use 'interval' instead of 'timeframe'
+                source=source
+            )
             
             if data and data.get("latest_price"):
                 # Ensure all fields are present
@@ -1056,10 +1104,6 @@ def enhanced_get_market_data(symbol, timeframe="1d", source="auto"):
                     'interval': data.get('interval', timeframe),
                     'realtime': data.get('realtime', False)
                 }
-                
-                # If real-time data, add WebSocket status
-                if result['realtime']:
-                    result['websocket_status'] = 'connected'
                 
                 return result
                 
@@ -1180,7 +1224,7 @@ def detect_market_query(text: str):
     return detected if detected else None
 
 def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
-    """Intelligently handle financial queries based on intent."""
+    """Intelligently handle financial queries - SMART OVERRIDE"""
     
     if not MARKET_TOOLS_AVAILABLE or not financial_tools:
         return {
@@ -1193,6 +1237,33 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
     fin_intent = extract_financial_intent(user_input)
     
     intent_type = fin_intent.get("intent")
+    print(f"🔍 Handling financial intent: {intent_type}")  # Debug
+    
+    # UPDATE CONTEXT
+    if 'financial_context' not in st.session_state:
+        st.session_state.financial_context = {}
+    
+    # Save the symbol/indicators for follow-up queries
+    if intent_type == "technical_analysis":
+        symbol = fin_intent.get("symbol")
+        indicators = fin_intent.get("indicators", [])
+        if symbol:
+            st.session_state.financial_context['last_symbol'] = symbol
+            st.session_state.financial_context['last_intent'] = intent_type
+            st.session_state.financial_context['last_indicators'] = indicators
+    
+    elif intent_type == "comprehensive_report":
+        symbol = fin_intent.get("symbol")
+        if symbol:
+            st.session_state.financial_context['last_symbol'] = symbol
+            st.session_state.financial_context['last_intent'] = intent_type
+    
+    elif intent_type == "comparison":
+        symbols = fin_intent.get("symbols", [])
+        if symbols:
+            # Save the last symbol for future comparisons
+            st.session_state.financial_context['last_symbol'] = symbols[0] if symbols else None
+            st.session_state.financial_context['last_intent'] = intent_type
     
     # Route to appropriate handler
     if intent_type == "basic_price":
@@ -1210,7 +1281,18 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
         symbol = fin_intent.get("symbol")
         indicators = fin_intent.get("indicators", [])
         
-        response_parts = [f"📊 TECHNICAL ANALYSIS: {symbol}\n" + "="*50]
+        # If no symbol, check context
+        if not symbol:
+            symbol = st.session_state.financial_context.get('last_symbol')
+        
+        if not symbol:
+            return {
+                "response": "❌ Please specify a symbol. Example: 'RSI of INFY'",
+                "status": UI_STATUS,
+                "mode": current_mode
+            }
+        
+        response_parts = [f"📊 TECHNICAL INDICATORS: {symbol}\n" + "="*50]
         
         # Get requested indicators
         if "rsi" in indicators:
@@ -1218,6 +1300,8 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
             if rsi:
                 signal = "Overbought 🔴" if rsi > 70 else "Oversold 🟢" if rsi < 30 else "Neutral 🟡"
                 response_parts.append(f"\nRSI(14): {rsi:.1f} - {signal}")
+            else:
+                response_parts.append(f"\n❌ Could not calculate RSI for {symbol}")
         
         if "ma" in indicators:
             mas = financial_tools.calculate_moving_averages(symbol)
@@ -1225,17 +1309,23 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
                 response_parts.append("\nMoving Averages:")
                 for period, value in mas.items():
                     response_parts.append(f"  MA{period}: ₹{value:.2f}")
+            else:
+                response_parts.append("\n❌ Could not calculate Moving Averages")
         
         if "volatility" in indicators:
             vol = financial_tools.calculate_volatility(symbol)
             if vol:
                 risk = "High 🔴" if vol > 40 else "Medium 🟡" if vol > 20 else "Low 🟢"
                 response_parts.append(f"\nVolatility: {vol:.1f}% - {risk}")
+            else:
+                response_parts.append("\n❌ Could not calculate Volatility")
         
-        # Add current price
-        data = enhanced_get_market_data(symbol)
-        if data.get('status') == 'ok':
-            response_parts.append(f"\nCurrent Price: ₹{data['price']:.2f}")
+        # Add current price if no indicators specified
+        if not indicators:
+            data = enhanced_get_market_data(symbol)
+            if data.get('status') == 'ok':
+                response_parts.append(f"\nCurrent Price: ₹{data['price']:.2f}")
+            response_parts.append("\nℹ️ Specify indicators like: RSI, Moving Averages, or Volatility")
         
         return {
             "response": "\n".join(response_parts),
@@ -1245,6 +1335,9 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
     
     elif intent_type == "comprehensive_report":
         symbol = fin_intent.get("symbol")
+        print(f"📊 Generating comprehensive report for {symbol}...")
+        
+        # Use generate_comprehensive_report method
         report = financial_tools.generate_comprehensive_report(symbol)
         
         return {
@@ -1256,25 +1349,34 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
     elif intent_type == "comparison":
         symbols = fin_intent.get("symbols", [])
         
+        # Handle "compare with TCS" when only one symbol is provided
+        if len(symbols) == 1:
+            last_symbol = st.session_state.financial_context.get('last_symbol')
+            if last_symbol:
+                symbols.insert(0, last_symbol)
+        
         if len(symbols) < 2:
             return {
-                "response": "Please specify at least 2 stocks to compare.",
+                "response": "❌ Please specify at least two symbols to compare. Example: 'Compare INFY and TCS'",
                 "status": UI_STATUS,
                 "mode": current_mode
             }
         
-        response_parts = [f"📊 COMPARISON: {' vs '.join(symbols)}\n" + "="*60]
+        response_parts = [f"📊 COMPARISON: {' vs '.join(symbols)}\n" + "="*50]
         
-        for symbol in symbols:
-            analysis = financial_tools.analyze_stock_for_agent(symbol, detailed=False)
-            response_parts.append(f"\n{analysis}")
-        
-        # Add summary
-        response_parts.append("\n💡 QUICK COMPARISON:")
         for symbol in symbols:
             data = enhanced_get_market_data(symbol)
             if data.get('status') == 'ok':
-                response_parts.append(f"  {symbol}: ₹{data['price']:.2f}")
+                response_parts.append(f"\n{symbol}:")
+                response_parts.append(f"  Price: ₹{data['price']:.2f}")
+                response_parts.append(f"  Source: {data.get('source', 'unknown')}")
+                
+                # Add basic technicals
+                rsi = financial_tools.calculate_rsi(symbol)
+                if rsi:
+                    response_parts.append(f"  RSI: {rsi:.1f}")
+            else:
+                response_parts.append(f"\n❌ {symbol}: Data unavailable")
         
         return {
             "response": "\n".join(response_parts),
@@ -1282,44 +1384,9 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
             "mode": current_mode
         }
     
-    elif intent_type == "risk_analysis":
-        symbol = fin_intent.get("symbol")
-        
-        response_parts = [f"⚠️ RISK ANALYSIS: {symbol}\n" + "="*50]
-        
-        vol = financial_tools.calculate_volatility(symbol)
-        if vol:
-            risk = "High 🔴" if vol > 40 else "Medium 🟡" if vol > 20 else "Low 🟢"
-            response_parts.append(f"\nVolatility: {vol:.1f}% - {risk}")
-        
-        sharpe = financial_tools.calculate_sharpe_ratio(symbol)
-        if sharpe:
-            rating = "Excellent 🟢" if sharpe > 2 else "Good 🟡" if sharpe > 1 else "Poor 🔴"
-            response_parts.append(f"Sharpe Ratio: {sharpe:.2f} - {rating}")
-        
-        # Add current price context
-        data = enhanced_get_market_data(symbol)
-        if data.get('status') == 'ok':
-            response_parts.append(f"\nCurrent Price: ₹{data['price']:.2f}")
-        
-        return {
-            "response": "\n".join(response_parts),
-            "status": UI_STATUS,
-            "mode": current_mode
-        }
-    
-    elif intent_type == "market_overview":
-        # Get NIFTY overview
-        analysis = financial_tools.analyze_stock_for_agent("NIFTY", detailed=True)
-        return {
-            "response": f"📊 MARKET OVERVIEW\n\n{analysis}",
-            "status": UI_STATUS,
-            "mode": current_mode
-        }
-    
-    # Fallback: not financial or unclear
-    return None  # Let main LLM handle it
-
+    # If no handler matched, return None to fall through to main LLM
+    return None
+  
 def check_goal_progress(user_input: str, vector_memory):
     """Check if user mentions goal progress"""
     if not vector_memory:
@@ -1629,7 +1696,36 @@ USER MESSAGE
         return {"intent": "normal_chat"}  # Safe fallback
 
 def extract_financial_intent(user_input: str) -> dict:
-    """Extract financial analysis intent from user input."""
+    """Extract financial analysis intent from user input - FIXED VERSION"""
+    
+    # Check if this is a follow-up query
+    user_lower = user_input.lower()
+    
+    # Follow-up indicator detection
+    follow_up_indicators = ['rsi', 'moving average', 'ma', 'volatility', 'technical']
+    
+    # If it's a follow-up query without a symbol
+    if ('what about' in user_lower or 'show me' in user_lower or 
+        'tell me' in user_lower) and any(indicator in user_lower for indicator in follow_up_indicators):
+        
+        # Get the last symbol from context
+        last_symbol = st.session_state.get('financial_context', {}).get('last_symbol')
+        
+        if last_symbol:
+            # Extract indicators
+            indicators = []
+            if 'rsi' in user_lower:
+                indicators.append('rsi')
+            if 'moving average' in user_lower or 'ma' in user_lower:
+                indicators.append('ma')
+            if 'volatility' in user_lower:
+                indicators.append('volatility')
+            
+            return {
+                "intent": "technical_analysis",
+                "symbol": last_symbol,
+                "indicators": indicators if indicators else ['rsi']  # Default to RSI
+            }
     
     prompt = f"""
 You are a financial query classifier for an AI trading assistant.
@@ -1643,16 +1739,18 @@ Classify into ONE of these intents:
 1. basic_price - User wants just current price
    Schema: {{"intent": "basic_price", "symbol": "<symbol>"}}
 
-2. technical_analysis - User wants technical indicators (RSI, MA, etc.)
+2. technical_analysis - User wants ONLY specific technical indicators (RSI, MA, etc.)
    Schema: {{"intent": "technical_analysis", "symbol": "<symbol>", "indicators": ["rsi", "ma", "volatility"]}}
+   **ONLY use this if user asks for SPECIFIC indicators like "RSI of INFY"**
 
-3. comprehensive_report - User wants detailed/full analysis
+3. comprehensive_report - User wants detailed/full analysis including volume profile, momentum, risk metrics
+   Keywords: comprehensive, full, detailed, complete, technical analysis, report
    Schema: {{"intent": "comprehensive_report", "symbol": "<symbol>"}}
 
 4. comparison - User wants to compare multiple stocks
    Schema: {{"intent": "comparison", "symbols": ["SYMBOL1", "SYMBOL2"]}}
 
-5. risk_analysis - User wants risk metrics
+5. risk_analysis - User wants risk metrics only
    Schema: {{"intent": "risk_analysis", "symbol": "<symbol>"}}
 
 6. market_overview - General market question
@@ -1661,11 +1759,25 @@ Classify into ONE of these intents:
 7. not_financial - Not a financial query
    Schema: {{"intent": "not_financial"}}
 
+**CRITICAL RULES:**
+- "technical analysis" → comprehensive_report (not technical_analysis intent)
+- "comprehensive report" → comprehensive_report
+- "full analysis" → comprehensive_report
+- "detailed analysis" → comprehensive_report
+- "RSI of INFY" → technical_analysis (only RSI)
+- "moving averages of INFY" → technical_analysis (only MA)
+- "What about RSI?" → technical_analysis (use context symbol)
+- "Compare with TCS" → comparison (use context + TCS)
+
 Examples:
 - "What's RELIANCE price?" → {{"intent": "basic_price", "symbol": "RELIANCE"}}
 - "Give me RSI of TCS" → {{"intent": "technical_analysis", "symbol": "TCS", "indicators": ["rsi"]}}
 - "Comprehensive report on INFY" → {{"intent": "comprehensive_report", "symbol": "INFY"}}
+- "Technical analysis of INFY" → {{"intent": "comprehensive_report", "symbol": "INFY"}}
+- "Full analysis of INFY" → {{"intent": "comprehensive_report", "symbol": "INFY"}}
 - "Compare RELIANCE and TCS" → {{"intent": "comparison", "symbols": ["RELIANCE", "TCS"]}}
+- "What about RSI?" (after INFY discussion) → {{"intent": "technical_analysis", "symbol": "INFY", "indicators": ["rsi"]}}
+- "Compare with TCS" (after INFY discussion) → {{"intent": "comparison", "symbols": ["INFY", "TCS"]}}
 
 Return ONLY valid JSON. No explanation.
 """
@@ -1676,7 +1788,9 @@ Return ONLY valid JSON. No explanation.
             messages=[{"role": "user", "content": prompt}],
             temperature=0
         )
-        return json.loads(resp.choices[0].message.content)
+        result = json.loads(resp.choices[0].message.content)
+        print(f"🔍 Financial intent detected: {result}")  # Debug log
+        return result
     except Exception as e:
         print(f"Financial intent extraction error: {e}")
         return {"intent": "not_financial"}
