@@ -3,125 +3,48 @@
 # ==============================
 import sys
 import os
-sys.dont_write_bytecode = True  # Skip .pyc generation
+import json
+import re
+import sqlite3
+from datetime import datetime, timedelta
+
+sys.dont_write_bytecode = True
 
 # ==============================
-# GLOBAL VARIABLES
+# STREAMLIT & ENV
 # ==============================
-if 'STREAMLIT_RUNTIME_EXISTS' not in os.environ:
-    os.environ['STREAMLIT_RUNTIME_EXISTS'] = '1'
+import streamlit as st
+from dotenv import load_dotenv
+import requests
+
+# Load environment variables FIRST
+load_dotenv()
 
 # NOW your existing code starts:
 CURRENT_MODE = "personal"  # personal | trading
 UI_STATUS = "Online"  # Online | Rate-limited | Offline
-CURRENT_MODE = "personal"  # personal | trading
-UI_STATUS = "Online"  # Online | Rate-limited | Offline
 
-import json
-import requests
-import os
-import streamlit as st
-from dotenv import load_dotenv
-import sqlite3 
 
-# Load environment variables FIRST
-load_dotenv()  # safe: does nothing on Streamlit Cloud
-
-from datetime import datetime, timedelta
-
-# Add near the top with other global variables
-ENHANCED_MEMORY_AVAILABLE = False
+# LAZY LOADING: Initialize flags but don't import until needed
+ENHANCED_MEMORY_AVAILABLE = None  # Will be set when first accessed
 vector_memory = None
 personality_engine = None
 pattern_recognizer = None
+_yfinance_module = None  # For lazy loading yfinance
 
-# Try to import enhanced memory systems (but don't fail if missing)
-try:
-    from memory.vector_memory import VectorMemory
-    from memory.personality_engine import PersonalityEngine
-    from memory.pattern_recognizer import PatternRecognizer
-    
-    # Initialize enhanced memory systems
-    vector_memory = VectorMemory()
-    personality_engine = PersonalityEngine()
-    pattern_recognizer = PatternRecognizer()
-    
-    ENHANCED_MEMORY_AVAILABLE = True
-    print("✓ Enhanced memory systems loaded")
-except ImportError as e:
-    ENHANCED_MEMORY_AVAILABLE = False
-    print(f"⚠️ Enhanced memory not available: {e}")
-    vector_memory = None
-    personality_engine = None
-    pattern_recognizer = None
-
-# Try to import market pipeline (but don't fail if missing)
-MARKET_PIPELINE_AVAILABLE = False
-MARKET_TOOLS_AVAILABLE = False
+# LAZY LOADING: Financial modules will be loaded on demand
+PROFESSIONAL_PIPELINE_AVAILABLE = None
+professional_pipeline = None
+MARKET_PIPELINE_AVAILABLE = None
 market_pipeline = None
+MARKET_TOOLS_AVAILABLE = None
 financial_tools = None
-UPSTOX_AVAILABLE = False
-PROFESSIONAL_PIPELINE_AVAILABLE = False
-professional_pipeline = None
+UPSTOX_AVAILABLE = None
+upstox_auth_flow = None
+check_upstox_auth = lambda: False  # Default fallback
+UpstoxAuth = None
 
-print("🔍 Loading financial modules...")
-
-# 1. Try to import PROFESSIONAL pipeline first (preferred)
-PROFESSIONAL_PIPELINE_AVAILABLE = False
-professional_pipeline = None
-
-try:
-    from financial.data.professional_pipeline import ProfessionalMarketPipeline
-    professional_pipeline = ProfessionalMarketPipeline(db_path="financial/data/professional.db")
-    PROFESSIONAL_PIPELINE_AVAILABLE = True
-    print(f"✅ Professional pipeline initialized from financial.data.professional_pipeline")
-    print(f"   Real-time data: ENABLED")
-except ImportError as e:
-    print(f"⚠️ Professional pipeline import failed: {e}")
-    PROFESSIONAL_PIPELINE_AVAILABLE = False
-    # Keep using minimal pipeline
-
-# 2. Import MinimalMarketPipeline as fallback
-try:
-    from financial.data.minimal_pipeline import MinimalMarketPipeline
-    market_pipeline = MinimalMarketPipeline()
-    MARKET_PIPELINE_AVAILABLE = True
-    print(f"✅ Market pipeline initialized from financial.data.minimal_pipeline")
-    print(f"   Sources: {market_pipeline.sources if hasattr(market_pipeline, 'sources') else 'unknown'}")
-except ImportError as e:
-    print(f"⚠️ Market pipeline import failed: {e}")
-    MARKET_PIPELINE_AVAILABLE = False
-    # Create dummy
-    class DummyMarketPipeline:
-        def __init__(self):
-            self.sources = ["dummy"]
-        def fetch_market_data(self, *args, **kwargs):
-            return None
-    market_pipeline = DummyMarketPipeline()
-
-# 2. Import FinancialTools from financial.financial_tools
-try:
-    from financial.financial_tools import FinancialTools
-    financial_tools = FinancialTools()
-    MARKET_TOOLS_AVAILABLE = True
-    print("✅ Financial tools loaded from financial.financial_tools")
-except ImportError as e:
-    MARKET_TOOLS_AVAILABLE = False
-    financial_tools = None
-    print(f"⚠️ Financial tools import failed: {e}")
-
-# 3. Import Upstox
-try:
-    from financial.auth.upstox_auth import upstox_auth_flow, check_upstox_auth, UpstoxAuth
-    UPSTOX_AVAILABLE = True
-    print("✅ Upstox auth tools loaded")
-except ImportError as e:
-    UPSTOX_AVAILABLE = False
-    upstox_auth_flow = None
-    check_upstox_auth = lambda: False
-    UpstoxAuth = None
-    print(f"⚠️ Upstox auth not available: {e}")
-# Move the old test block to a separate function
+# Keep the test_fyers_integration function as is
 def test_fyers_integration():
     """Test Fyers integration separately"""
     print("🔐 Testing Fyers integration...")
@@ -131,6 +54,9 @@ def test_fyers_integration():
         token = setup_fyers_auth()
         if token:
             print(f"✅ Authentication successful")
+            
+            # Lazy load market pipeline if needed
+            lazy_load_market_pipeline()
             
             # Test Fyers data fetch
             if MARKET_PIPELINE_AVAILABLE and market_pipeline:
@@ -149,6 +75,73 @@ def test_fyers_integration():
     except ImportError as e:
         print(f"⚠️ Fyers auth import error: {e}")
 
+# Add this lazy loader function after test_fyers_integration
+def lazy_load_financial_tools():
+    """Lazy load financial tools when needed"""
+    global MARKET_TOOLS_AVAILABLE, financial_tools, UPSTOX_AVAILABLE, upstox_auth_flow, check_upstox_auth, UpstoxAuth
+    
+    # Load financial tools if not already loaded
+    if MARKET_TOOLS_AVAILABLE is None:
+        try:
+            from financial.financial_tools import FinancialTools
+            financial_tools = FinancialTools()
+            MARKET_TOOLS_AVAILABLE = True
+            print("✅ Lazy loaded financial tools")
+        except ImportError as e:
+            MARKET_TOOLS_AVAILABLE = False
+            financial_tools = None
+            print(f"⚠️ Financial tools import failed: {e}")
+    
+    # Load Upstox if not already loaded
+    if UPSTOX_AVAILABLE is None:
+        try:
+            from financial.auth.upstox_auth import upstox_auth_flow as uaf, check_upstox_auth as cua, UpstoxAuth as UA
+            upstox_auth_flow = uaf
+            check_upstox_auth = cua
+            UpstoxAuth = UA
+            UPSTOX_AVAILABLE = True
+            print("✅ Lazy loaded Upstox auth tools")
+        except ImportError as e:
+            UPSTOX_AVAILABLE = False
+            upstox_auth_flow = None
+            check_upstox_auth = lambda: False
+            UpstoxAuth = None
+            print(f"⚠️ Upstox auth not available: {e}")
+
+# Add this pipeline lazy loader function
+def lazy_load_market_pipeline():
+    """Lazy load market pipelines when needed"""
+    global PROFESSIONAL_PIPELINE_AVAILABLE, professional_pipeline, MARKET_PIPELINE_AVAILABLE, market_pipeline
+    
+    # Try professional pipeline first
+    if PROFESSIONAL_PIPELINE_AVAILABLE is None:
+        try:
+            from financial.data.professional_pipeline import ProfessionalMarketPipeline
+            professional_pipeline = ProfessionalMarketPipeline(db_path="financial/data/professional.db")
+            PROFESSIONAL_PIPELINE_AVAILABLE = True
+            print("✅ Lazy loaded professional pipeline")
+        except ImportError as e:
+            PROFESSIONAL_PIPELINE_AVAILABLE = False
+            print(f"⚠️ Professional pipeline import failed: {e}")
+    
+    # Fallback to minimal pipeline
+    if MARKET_PIPELINE_AVAILABLE is None:
+        try:
+            from financial.data.minimal_pipeline import MinimalMarketPipeline
+            market_pipeline = MinimalMarketPipeline()
+            MARKET_PIPELINE_AVAILABLE = True
+            print("✅ Lazy loaded professional pipeline")
+        except ImportError as e:
+            MARKET_PIPELINE_AVAILABLE = False
+            # Create dummy
+            class DummyMarketPipeline:
+                def __init__(self):
+                    self.sources = ["dummy"]
+                def fetch_market_data(self, *args, **kwargs):
+                    return None
+            market_pipeline = DummyMarketPipeline()
+            print(f"⚠️ Market pipeline import failed, using dummy: {e}")
+        
 # Constants moved from original position
 IDENTITY_CONFLICT_WINDOW = timedelta(days=2)
 CONFIDENCE_DECAY_PER_DAY = 0.05
@@ -194,13 +187,39 @@ def save_json(path, data):
 
 def apply_memory_action(action):
     """
-    Simplified memory action handler.
-    In a real implementation, this would be more complex.
+    MEMORY WRITE PRIMITIVE (LOW-LEVEL)
+
+    IMPORTANT DESIGN CONTRACT:
+    --------------------------
+    This function is a *dumb write primitive*.
+    It MUST NOT decide:
+      - cardinality (single vs multiple)
+      - conflicts
+      - overwrites
+      - promotions
+
+    All semantic decisions (cardinality, conflict resolution,
+    duplication, user confirmation) MUST be handled
+    BEFORE calling this function.
+
+    apply_memory_action() assumes:
+      - the caller has already validated correctness
+      - the write is intentional and authorized
+      - overwriting rules have already been enforced
+
+    This separation is intentional to preserve:
+      - predictability
+      - auditability
+      - debuggability
+
+    If cardinality logic appears here, it is a BUG.
     """
     memory_type = action.get("type", "")
     domain = action.get("domain", "personal")
     
     if memory_type == "ADD_FACT":
+        # NOTE: Cardinality/conflict checks are intentionally NOT done here.
+        # They MUST be enforced by the caller before invoking this write.
         if domain == "personal":
             file_path = os.path.join(MEMORY_DIR, "core_identity.json")
         elif domain == "trading":
@@ -364,7 +383,27 @@ def get_market_data(symbol, timeframe="1d"):
     Enhanced market data fetcher using your working MinimalMarketPipeline
     Returns: (data_dict, source, status)
     """
+    # LAZY LOAD: Initialize financial modules if not already loaded
+    global MARKET_PIPELINE_AVAILABLE, market_pipeline, _yfinance_module
+    
     # If enhanced pipeline is available, use it
+    if MARKET_PIPELINE_AVAILABLE is None:
+        # Lazy load market pipeline
+        try:
+            from financial.data.minimal_pipeline import MinimalMarketPipeline
+            market_pipeline = MinimalMarketPipeline()
+            MARKET_PIPELINE_AVAILABLE = True
+            print("✅ Lazy loaded market pipeline")
+        except ImportError as e:
+            MARKET_PIPELINE_AVAILABLE = False
+            # Create dummy
+            class DummyMarketPipeline:
+                def __init__(self):
+                    self.sources = ["dummy"]
+                def fetch_market_data(self, *args, **kwargs):
+                    return None
+            market_pipeline = DummyMarketPipeline()
+    
     if MARKET_PIPELINE_AVAILABLE and market_pipeline:
         try:
             # Call pipeline WITHOUT interval parameter
@@ -399,9 +438,14 @@ def get_market_data(symbol, timeframe="1d"):
             print(f"Enhanced pipeline error for {symbol}: {e}")
             # Fall through to simple method
     
-    # FALLBACK: Simple yfinance method (always works)
+    # FALLBACK: Simple yfinance method (always works) with lazy loading
     try:
-        import yfinance as yf
+        # LAZY LOAD yfinance
+        global _yfinance_module
+        if _yfinance_module is None:
+            import yfinance as yf
+            _yfinance_module = yf
+            print("✅ Lazy loaded yfinance")
         
         # Map timeframe to yfinance parameters
         period_map = {
@@ -431,7 +475,7 @@ def get_market_data(symbol, timeframe="1d"):
         
         print(f"📊 Fallback: Fetching {symbol} ({period}/{interval}) via yfinance...")
         
-        ticker = yf.Ticker(symbol)
+        ticker = _yfinance_module.Ticker(symbol)
         df = ticker.history(period=period, interval=interval)
         
         if df.empty:
@@ -959,15 +1003,21 @@ Memory should be:
 # AGENT_CONSTITUTION = AGENT_CONSTITUTION.replace("MEMORY POLICY", "MEMORY POLICY V2.0")
 
 # ================================
-# ROUTELLM CLIENT
+# ROUTELLM CLIENT - LAZY LOADED
 # ================================
-from openai import OpenAI
-import os
+_openai_client = None
 
-client = OpenAI(
-    api_key=os.environ.get("ROUTELLM_API_KEY", "dummy-key"),   # Abacus key
-    base_url="https://routellm.abacus.ai/v1"  # ⬅️ BASE ONLY
-)
+def get_openai_client():
+    """Lazy load OpenAI client."""
+    global _openai_client
+    if _openai_client is None:
+        from openai import OpenAI
+        _openai_client = OpenAI(
+            api_key=os.environ.get("ROUTELLM_API_KEY", "dummy-key"),   # Abacus key
+            base_url="https://routellm.abacus.ai/v1"  # ⬅️ BASE ONLY
+        )
+        print("✅ Lazy loaded OpenAI client")
+    return _openai_client
 
 # ================================
 # CORE LLM FUNCTIONS
@@ -1007,6 +1057,7 @@ def routellm_think(user_input, working_memory, core_identity, conversation_histo
     messages.append({"role": "user", "content": user_input})
     
     try:
+        client = get_openai_client()
         resp = client.chat.completions.create(
             model="route-llm",
             messages=messages,
@@ -1062,6 +1113,7 @@ def routellm_think_with_image(user_input, working_memory, core_identity, image_d
         messages.append({"role": "user", "content": user_input})
     
     try:
+        client = get_openai_client()
         resp = client.chat.completions.create(
             model="route-llm",
             messages=messages,
@@ -1090,6 +1142,21 @@ def enhanced_get_market_data(symbol, timeframe="1d", source="auto"):
     Enhanced market data fetcher - FIXED VERSION
     """
     print(f"🔍 Fetching market data for: {symbol}")
+
+    # LAZY LOAD market pipelines
+    lazy_load_market_pipeline()
+    
+    # LAZY LOAD: Check professional pipeline
+    global PROFESSIONAL_PIPELINE_AVAILABLE, professional_pipeline
+    if PROFESSIONAL_PIPELINE_AVAILABLE is None:
+        try:
+            from financial.data.professional_pipeline import ProfessionalMarketPipeline
+            professional_pipeline = ProfessionalMarketPipeline(db_path="financial/data/professional.db")
+            PROFESSIONAL_PIPELINE_AVAILABLE = True
+            print(f"✅ Lazy loaded professional pipeline")
+        except ImportError as e:
+            PROFESSIONAL_PIPELINE_AVAILABLE = False
+            print(f"⚠️ Professional pipeline import failed: {e}")
     
     # If professional pipeline is available, use it
     if PROFESSIONAL_PIPELINE_AVAILABLE and professional_pipeline:
@@ -1144,7 +1211,12 @@ def enhanced_get_market_data(symbol, timeframe="1d", source="auto"):
     
     # Ultimate fallback to yfinance (always works)
     try:
-        import yfinance as yf
+        # LAZY LOAD yfinance
+        global _yfinance_module
+        if _yfinance_module is None:
+            import yfinance as yf
+            _yfinance_module = yf
+            print("✅ Lazy loaded yfinance")
         
         # Add .NS suffix for Indian stocks if not present
         if not symbol.endswith(('.NS', '.BO', '^')) and source != "crypto":
@@ -1166,7 +1238,7 @@ def enhanced_get_market_data(symbol, timeframe="1d", source="auto"):
         period = period_map.get(timeframe, "5d")
         interval = interval_map.get(timeframe, "1d")
         
-        ticker = yf.Ticker(symbol_to_fetch)
+        ticker = _yfinance_module.Ticker(symbol_to_fetch)
         df = ticker.history(period=period, interval=interval)
         
         if df.empty:
@@ -1240,6 +1312,9 @@ def detect_market_query(text: str):
 def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
     """Intelligently handle financial queries - SMART OVERRIDE"""
     
+    # LAZY LOAD financial tools
+    lazy_load_financial_tools()
+    
     if not MARKET_TOOLS_AVAILABLE or not financial_tools:
         return {
             "response": "Financial tools are not available.",
@@ -1254,17 +1329,16 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
     # Extract financial intent
     fin_intent = extract_financial_intent(user_input)
     intent_type = fin_intent.get("intent")
+    symbol = fin_intent.get("symbol")  # Extract symbol here
     
     # ALWAYS save symbol context for ALL financial queries
-    symbol = fin_intent.get("symbol")
     if symbol:
         st.session_state.financial_context['last_symbol'] = symbol
         st.session_state.financial_context['last_intent'] = intent_type
-        print(f"💾 Saved context: {symbol}")  # Debug
+        print(f"💾 Saved context: {symbol}")
     
     # Route to appropriate handler
     if intent_type == "basic_price":
-        symbol = fin_intent.get("symbol")
         data = enhanced_get_market_data(symbol)
         
         if data.get('status') == 'ok':
@@ -1273,12 +1347,15 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
                 "status": UI_STATUS,
                 "mode": current_mode
             }
+        else:
+            return {
+                "response": f"❌ Could not fetch data for {symbol}",
+                "status": UI_STATUS,
+                "mode": current_mode
+            }
     
     elif intent_type == "technical_analysis":
-        symbol = fin_intent.get("symbol")
-        indicators = fin_intent.get("indicators", [])
-        
-        # If no symbol, check context
+        # If no symbol from intent, check context
         if not symbol:
             symbol = st.session_state.financial_context.get('last_symbol')
         
@@ -1292,6 +1369,7 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
         response_parts = [f"📊 TECHNICAL INDICATORS: {symbol}\n" + "="*50]
         
         # Get requested indicators
+        indicators = fin_intent.get("indicators", [])
         if "rsi" in indicators:
             rsi = financial_tools.calculate_rsi(symbol)
             if rsi:
@@ -1331,7 +1409,16 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
         }
     
     elif intent_type == "comprehensive_report":
-        symbol = fin_intent.get("symbol")
+        if not symbol:
+            symbol = st.session_state.financial_context.get('last_symbol')
+            
+        if not symbol:
+            return {
+                "response": "❌ Please specify a symbol. Example: 'Comprehensive report on INFY'",
+                "status": UI_STATUS,
+                "mode": current_mode
+            }
+            
         print(f"📊 Generating comprehensive report for {symbol}...")
         
         # Use generate_comprehensive_report method
@@ -1361,27 +1448,25 @@ def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
         
         response_parts = [f"📊 COMPARISON: {' vs '.join(symbols)}\n" + "="*50]
         
-        for symbol in symbols:
-            data = enhanced_get_market_data(symbol)
+        for sym in symbols:
+            data = enhanced_get_market_data(sym)
             if data.get('status') == 'ok':
-                response_parts.append(f"\n{symbol}:")
+                response_parts.append(f"\n{sym}:")
                 response_parts.append(f"  Price: ₹{data['price']:.2f}")
                 response_parts.append(f"  Source: {data.get('source', 'unknown')}")
                 
                 # Add basic technicals
-                rsi = financial_tools.calculate_rsi(symbol)
+                rsi = financial_tools.calculate_rsi(sym)
                 if rsi:
                     response_parts.append(f"  RSI: {rsi:.1f}")
             else:
-                response_parts.append(f"\n❌ {symbol}: Data unavailable")
+                response_parts.append(f"\n❌ {sym}: Data unavailable")
         
         return {
             "response": "\n".join(response_parts),
             "status": UI_STATUS,
             "mode": current_mode
         }
-    if symbol:
-        st.session_state.financial_context['last_symbol'] = symbol
     
     # If no handler matched, return None to fall through to main LLM
     return None
@@ -1476,6 +1561,52 @@ def auto_journal_trading(user_input, model_response):
     
     journal["entries"].append(entry)
     save_json(journal_path, journal)
+
+def mood_auto_detection(user_input: str, vector_memory):
+    """Automatically detect and log mood from user input"""
+    if not vector_memory:
+        return
+    
+    user_lower = user_input.lower()
+    
+    # Mood keyword detection
+    mood_keywords = {
+        'happy': (8, 7, 'happy'),
+        'excited': (9, 8, 'excited'),
+        'good': (7, 6, 'happy'),
+        'great': (8, 7, 'happy'),
+        'awesome': (9, 8, 'excited'),
+        'sad': (3, 4, 'sad'),
+        'angry': (2, 3, 'angry'),
+        'frustrated': (3, 4, 'angry'),
+        'tired': (4, 3, 'tired'),
+        'exhausted': (3, 2, 'tired'),
+        'energetic': (8, 9, 'excited'),
+        'calm': (7, 6, 'calm'),
+        'stressed': (3, 4, 'anxious'),
+        'anxious': (3, 4, 'anxious'),
+        'nervous': (4, 5, 'anxious')
+    }
+    
+    detected_moods = []
+    for word, (mood_score, energy_level, emotion) in mood_keywords.items():
+        if word in user_lower:
+            detected_moods.append((mood_score, energy_level, emotion))
+    
+    if detected_moods:
+        # Take the most extreme mood detected
+        primary_mood = max(detected_moods, key=lambda x: abs(x[0] - 5))
+        
+        # Log mood
+        vector_memory.log_mood(
+            mood_score=primary_mood[0],
+            energy_level=primary_mood[1],
+            emotion=primary_mood[2],
+            context="auto-detected from conversation",
+            notes=f"From input: '{user_input[:50]}...'"
+        )
+        
+        print(f"✓ Auto-detected mood: {primary_mood[2]} (score: {primary_mood[0]})")
 
 def extract_intent(user_input: str) -> dict:
     """Extract intent from user input using LLM."""
@@ -1668,6 +1799,7 @@ USER MESSAGE
 """               
     
     try:
+        client = get_openai_client()
         resp = client.chat.completions.create(
             model="route-llm",
             messages=[
@@ -1782,6 +1914,7 @@ Return ONLY valid JSON. No explanation.
 """
     
     try:
+        client = get_openai_client()
         resp = client.chat.completions.create(
             model="route-llm",
             messages=[{"role": "user", "content": prompt}],
@@ -2058,6 +2191,7 @@ Do NOT add extra keys.
 """
     
     try:
+        client = get_openai_client()
         resp = client.chat.completions.create(
             model="route-llm",
             messages=[
@@ -2193,6 +2327,7 @@ def process_user_input(user_input: str, conversation_history: list = None) -> di
     # --- Implicit confirmation handling ---
     if PENDING_IDENTITY_CONFIRMATION:
         try:
+            client = get_openai_client()
             resp = client.chat.completions.create(
                 model="route-llm",
                 messages=[
@@ -2501,7 +2636,9 @@ def process_user_input(user_input: str, conversation_history: list = None) -> di
             response = "I couldn't identify the instrument."
         else:
             symbol = instrument["symbol"]
-            data, source, status = get_market_data(symbol, "1min")
+            data = enhanced_get_market_data(symbol, "1min")
+            source = data.get('source', 'unknown')
+            status = data.get('status', 'error')
             
             if status != "ok" or not data:
                 response = "Market data is unavailable right now."
@@ -2536,6 +2673,25 @@ def process_user_input(user_input: str, conversation_history: list = None) -> di
         ai_response = f"LLM crashed – {str(e)[:100]}..."
     
     # --- ENHANCED MEMORY INTEGRATION ---
+    # LAZY LOAD enhanced memory systems
+    global ENHANCED_MEMORY_AVAILABLE, vector_memory, personality_engine, pattern_recognizer
+    if ENHANCED_MEMORY_AVAILABLE is None:
+        try:
+            from memory.vector_memory import VectorMemory
+            from memory.personality_engine import PersonalityEngine
+            from memory.pattern_recognizer import PatternRecognizer
+            
+            # Initialize enhanced memory systems
+            vector_memory = VectorMemory()
+            personality_engine = PersonalityEngine()
+            pattern_recognizer = PatternRecognizer()
+            
+            ENHANCED_MEMORY_AVAILABLE = True
+            print("✅ Lazy loaded enhanced memory systems")
+        except ImportError as e:
+            ENHANCED_MEMORY_AVAILABLE = False
+            print(f"⚠️ Enhanced memory not available: {e}")
+    
     if ENHANCED_MEMORY_AVAILABLE:
         try:
             # 1. Store conversation in vector memory
@@ -2634,7 +2790,18 @@ def auto_learn(user_input, working_memory):
     # -----------------------------
     # ENHANCED: PATTERN DETECTION
     # -----------------------------
-    if ENHANCED_MEMORY_AVAILABLE:
+    # LAZY LOAD enhanced memory systems
+    global ENHANCED_MEMORY_AVAILABLE, pattern_recognizer
+    if ENHANCED_MEMORY_AVAILABLE is None:
+        try:
+            from memory.pattern_recognizer import PatternRecognizer
+            pattern_recognizer = PatternRecognizer()
+            # Set flag but don't need to load all modules yet
+            ENHANCED_MEMORY_AVAILABLE = True
+        except ImportError:
+            ENHANCED_MEMORY_AVAILABLE = False
+    
+    if ENHANCED_MEMORY_AVAILABLE and pattern_recognizer:
         try:
             # Extract intent for pattern analysis
             intent = extract_intent(user_input)
@@ -2695,6 +2862,15 @@ def auto_learn(user_input, working_memory):
     # -----------------------------
     # ENHANCED: PERSONALITY ANALYSIS
     # -----------------------------
+    # LAZY LOAD personality engine
+    global personality_engine
+    if ENHANCED_MEMORY_AVAILABLE and personality_engine is None:
+        try:
+            from memory.personality_engine import PersonalityEngine
+            personality_engine = PersonalityEngine()
+        except ImportError:
+            personality_engine = None
+    
     if ENHANCED_MEMORY_AVAILABLE and personality_engine:
         try:
             # Simple personality trait extraction
@@ -2735,6 +2911,20 @@ def main():
     # Sidebar with Upstox authentication
     with st.sidebar:
         st.header("🔐 Upstox Authentication")
+        
+        # LAZY LOAD Upstox
+        lazy_load_financial_tools()
+        if UPSTOX_AVAILABLE is None:
+            try:
+                from financial.auth.upstox_auth import upstox_auth_flow, check_upstox_auth, UpstoxAuth
+                UPSTOX_AVAILABLE = True
+                print("✅ Lazy loaded Upstox auth")
+            except ImportError as e:
+                UPSTOX_AVAILABLE = False
+                upstox_auth_flow = None
+                check_upstox_auth = lambda: False
+                UpstoxAuth = None
+                print(f"⚠️ Upstox auth not available: {e}")
         
         if UPSTOX_AVAILABLE:
             if check_upstox_auth():
@@ -2821,59 +3011,33 @@ def main():
                 CURRENT_MODE = result["mode"]
         
         st.rerun()
-        
-def mood_auto_detection(user_input: str, vector_memory):
-    """Automatically detect and log mood from user input"""
-    if not vector_memory:
-        return
-    
-    user_lower = user_input.lower()
-    
-    # Mood keyword detection
-    mood_keywords = {
-        'happy': (8, 7, 'happy'),
-        'excited': (9, 8, 'excited'),
-        'good': (7, 6, 'happy'),
-        'great': (8, 7, 'happy'),
-        'awesome': (9, 8, 'excited'),
-        'sad': (3, 4, 'sad'),
-        'angry': (2, 3, 'angry'),
-        'frustrated': (3, 4, 'angry'),
-        'tired': (4, 3, 'tired'),
-        'exhausted': (3, 2, 'tired'),
-        'energetic': (8, 9, 'excited'),
-        'calm': (7, 6, 'calm'),
-        'stressed': (3, 4, 'anxious'),
-        'anxious': (3, 4, 'anxious'),
-        'nervous': (4, 5, 'anxious')
-    }
-    
-    detected_moods = []
-    for word, (mood_score, energy_level, emotion) in mood_keywords.items():
-        if word in user_lower:
-            detected_moods.append((mood_score, energy_level, emotion))
-    
-    if detected_moods:
-        # Take the most extreme mood detected
-        primary_mood = max(detected_moods, key=lambda x: abs(x[0] - 5))
-        
-        # Log mood
-        vector_memory.log_mood(
-            mood_score=primary_mood[0],
-            energy_level=primary_mood[1],
-            emotion=primary_mood[2],
-            context="auto-detected from conversation",
-            notes=f"From input: '{user_input[:50]}...'"
-        )
-        
-        print(f"✓ Auto-detected mood: {primary_mood[2]} (score: {primary_mood[0]})")
 
 
 # ================================
 # ENTRY POINT
 # ================================
 if __name__ == "__main__":
-    # Only run tests if called directly
-    test_fyers_integration()
+    # Quick test to verify functions exist
+    try:
+        test_fyers_integration()
+        
+        # Test that required functions exist
+        test_functions = [
+            'get_market_data',
+            'mood_auto_detection', 
+            'enhanced_get_market_data',
+            'process_user_input',
+            'main'
+        ]
+        
+        for func in test_functions:
+            if func in globals():
+                print(f"✅ {func}() exists")
+            else:
+                print(f"❌ {func}() MISSING!")
+                
+    except Exception as e:
+        print(f"Setup error: {e}")
+    
     print("\n🚀 Starting AI Agent...")
     main()

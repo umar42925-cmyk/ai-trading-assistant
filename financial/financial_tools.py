@@ -643,41 +643,9 @@ Source: {data.get('source', 'unknown')}
             return f"❌ Report generation error: {str(e)[:100]}"
 
 
-# ========================================================================
-# STANDALONE TESTING
-# ========================================================================
-
-def test_financial_tools():
-    """Test financial tools with professional pipeline"""
-    print("🧪 Testing Financial Tools")
-    print("="*60)
-    
-    tools = FinancialTools()
-    
-    # Test 1: Basic analysis
-    print("\n1. Basic Analysis:")
-    analysis = tools.analyze_stock_for_agent("RELIANCE")
-    print(analysis)
-    
-    # Test 2: Detailed analysis
-    print("\n2. Detailed Analysis:")
-    detailed = tools.analyze_stock_for_agent("NIFTY", detailed=True)
-    print(detailed)
-    
-    # Test 3: Portfolio snapshot
-    print("\n3. Portfolio Snapshot:")
-    portfolio = tools.get_portfolio_snapshot(["RELIANCE", "TCS", "INFY"])
-    for symbol, data in portfolio.items():
-        print(f"  {symbol}: ₹{data['price']:.2f} (Q: {data.get('quality', 'N/A')})")
-    
-    # Test 4: Comprehensive report
-    print("\n4. Comprehensive Report:")
-    report = tools.generate_comprehensive_report("TCS")
-    print(report)
-    
-    print("\n" + "="*60)
-    print("✅ Financial Tools Test Complete!")
-
-
 if __name__ == "__main__":
-    test_financial_tools()
+    """Minimal entry point for production use"""
+    print("✅ Financial Tools Initialized")
+    print("Use: from financial_tools import FinancialTools")
+    print("Then: tools = FinancialTools()")
+    print("And: analysis = tools.analyze_stock_for_agent('AAPL')")
