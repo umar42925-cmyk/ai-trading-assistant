@@ -12,11 +12,38 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
 # Now import from main.py
+# Now import from main.py
 try:
-    from main import process_user_input
-    from main import working_memory
+    from main import (
+        process_user_input,
+        working_memory,
+        ENHANCED_MEMORY_AVAILABLE,
+        personality_engine,
+        pattern_recognizer,
+        vector_memory,
+        ensure_session_initialized  # NEW
+    )
     IMPORT_SUCCESS = True
 except ImportError as e:
+    print(f"⚠️ Import warning: {e}")
+    IMPORT_SUCCESS = False
+    
+    # Create fallback functions if import fails
+    def process_user_input(user_input, conversation_history=None):
+        return {
+            "response": "System initializing... Please run main.py directly.",
+            "status": "Offline", 
+            "mode": "personal"
+        }
+    
+    working_memory = {"observations": []}
+    
+    # Mock functions
+    ENHANCED_MEMORY_AVAILABLE = False
+    personality_engine = None
+    pattern_recognizer = None
+    vector_memory = None
+    ensure_session_initialized = lambda: None
     print(f"⚠️ Import warning: {e}")
     IMPORT_SUCCESS = False
     
@@ -257,6 +284,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --------------------------------------------------
+# Initialize main session
+# --------------------------------------------------
+ensure_session_initialized()
+
+# --------------------------------------------------
 # Session state initialization
 # --------------------------------------------------
 if "chat" not in st.session_state:
@@ -457,6 +489,41 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # ========================================
+    # OPTIMIZATION DASHBOARD
+    # ========================================
+    with st.expander("📊 Optimization Dashboard", expanded=False):
+        try:
+            from main import get_cache_stats
+            
+            stats = get_cache_stats()
+            st.markdown("**Cache Performance:**")
+            for cache_name, cache_stats in stats.items():
+                st.text(f"{cache_name}: {cache_stats['hit_rate']}")
+            
+            # Session info
+            st.markdown("---")
+            st.markdown("**Session:**")
+            
+            # Get session info from main.py's session state
+            import main
+            session_id = main.st.session_state.get('session_id', 'N/A')[:8]
+            st.text(f"ID: {session_id}")
+            st.text(f"LLM Calls: {main.st.session_state.get('llm_calls_count', 0)}")
+            st.text(f"Constitution Sent: {main.st.session_state.get('constitution_sent', False)}")
+            
+            # Clear cache button
+            if st.button("🗑️ Clear All Caches", use_container_width=True, key="clear_cache_btn"):
+                from main import clear_all_caches
+                clear_all_caches()
+                st.success("Caches cleared!")
+                st.rerun()
+                
+        except Exception as e:
+            st.info(f"Optimization dashboard unavailable: {str(e)[:50]}")
+    
+    st.markdown("---")
+
     # Working memory status
     st.markdown("### 📄 Working Memory")
     try:
@@ -607,13 +674,16 @@ if st.session_state.thinking:
         mode = st.session_state.mode
         print(f"Error in app.py processing: {e}")
     
-    # Update conversation history
-    st.session_state.conversation_history.append({"role": "user", "content": last_msg})
-    st.session_state.conversation_history.append({"role": "assistant", "content": ai_text})
-    
-    # Keep only last 20 messages (10 exchanges)
-    if len(st.session_state.conversation_history) > 20:
-        st.session_state.conversation_history = st.session_state.conversation_history[-20:]
+        # Update conversation history in OpenAI format
+        # Convert chat to OpenAI format (last 20 messages = 10 exchanges)
+        chat_messages = []
+        for speaker, text in st.session_state.chat[-20:]:  # Last 20 messages
+            if speaker == "You":
+                chat_messages.append({"role": "user", "content": text})
+            else:  # AI
+                chat_messages.append({"role": "assistant", "content": text})
+        
+        st.session_state.conversation_history = chat_messages
     
     # Update session state
     st.session_state.status = status

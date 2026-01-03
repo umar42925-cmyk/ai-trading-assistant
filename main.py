@@ -1016,24 +1016,46 @@ def optimized_routellm_think(user_input, working_memory, core_identity,
         return f"Error: {str(e)[:100]}"
 
 def routellm_think_with_image(user_input, working_memory, core_identity, image_data=None):
-    """Enhanced version that supports image input."""
-    messages = [
-        {"role": "system", "content": AGENT_CONSTITUTION.strip()},
-        {"role": "system", "content": FINANCIAL_INTELLIGENCE.strip()},
-        {"role": "system", "content": MEMORY_POLICY.strip()},
-        {
-            "role": "system",
-            "content": "Personal observations:\n"
-            + json.dumps(working_memory.get("observations") or [], indent=2)
-        },
-        {
-            "role": "system",
-            "content": "Core facts:\n"
-            + json.dumps(core_identity.get("facts", []), indent=2)
-        }
-    ]
+    """Enhanced version that supports image input - OPTIMIZED."""
     
-    # Add user message with or without image
+    # Use unified intent extraction (cached)
+    context = st.session_state.get('financial_context', {})
+    unified_intent = cached_extract_unified_intent(user_input, context)
+    
+    # Determine if this is first call of session
+    first_call_of_session = not st.session_state.get('constitution_sent', False)
+    
+    # Build optimized messages
+    messages = []
+    
+    # Determine what to send based on intent
+    intent_type = get_intent_type(unified_intent)
+    send_full_constitution = should_send_full_constitution(unified_intent, first_call_of_session)
+    send_memory_policy = should_send_memory_policy(unified_intent)
+    send_financial = (unified_intent.get("primary_intent") == "financial") if unified_intent else False
+    
+    if send_full_constitution:
+        messages.append({"role": "system", "content": FULL_CONSTITUTION})
+        if send_memory_policy:
+            messages.append({"role": "system", "content": FULL_MEMORY_POLICY})
+        else:
+            messages.append({"role": "system", "content": "You can access stored user facts when needed."})
+    else:
+        messages.append({"role": "system", "content": SYSTEM_CORE})
+    
+    if send_financial:
+        messages.append({"role": "system", "content": FULL_FINANCIAL_INTELLIGENCE})
+    
+    # Add memory context if needed
+    if send_full_constitution:
+        fact_count = len(core_identity.get("facts", []))
+        if fact_count > 0:
+            messages.append({
+                "role": "system", 
+                "content": f"You have access to {fact_count} stored personal facts."
+            })
+    
+    # Add user message with image
     if image_data:
         messages.append({
             "role": "user",
@@ -1050,13 +1072,34 @@ def routellm_think_with_image(user_input, working_memory, core_identity, image_d
     else:
         messages.append({"role": "user", "content": user_input})
     
+    # Log optimization
+    log_prompt_optimization(unified_intent, send_full_constitution, send_memory_policy, 
+                           send_financial, 0)  # No conversation history for images
+    
     try:
         client = get_openai_client()
+        
+        # Use vision model if image present
+        if image_data:
+            # Check if we should use a vision model
+            model = "gpt-4-vision-preview" if "vision" in os.environ.get("OPENAI_MODEL", "").lower() else "route-llm"
+        else:
+            model = "route-llm"
+        
         resp = client.chat.completions.create(
-            model="route-llm",
+            model=model,
             messages=messages,
             temperature=0.6,
         )
+        
+        # Track session state
+        if not st.session_state.constitution_sent and send_full_constitution:
+            st.session_state.constitution_sent = True
+            print(f"🏷️ Constitution marked as sent (with image) for session {st.session_state.get('session_id', 'unknown')}")
+        
+        # Track LLM calls
+        st.session_state.llm_calls_count = st.session_state.get('llm_calls_count', 0) + 1
+        
         return resp.choices[0].message.content
     except Exception as e:
         error_msg = str(e)
@@ -2550,6 +2593,9 @@ def process_user_input(user_input: str, conversation_history: list = None) -> di
     if conversation_history is None:
         conversation_history = []
     
+    # Ensure session is initialized
+    ensure_session_initialized() 
+    
     ai_response = None
     model_response = None
     image_data = None
@@ -2659,7 +2705,27 @@ def process_user_input(user_input: str, conversation_history: list = None) -> di
     if lower.startswith("/"):
         return {"response": "Command not supported", "status": UI_STATUS, "mode": CURRENT_MODE}
     
-    intent = extract_intent(user_input)
+    # For compatibility with auto_learn, extract basic intent
+    # but use cached version when possible
+    if "remember" in lower or "save" in lower or "from now on" in lower:
+        # Use old system for explicit memory commands to maintain compatibility
+        intent = extract_intent(user_input)
+    else:
+        # Use unified intent for better caching and optimization
+        intent = cached_extract_unified_intent(user_input, {})
+        
+        # Convert unified intent to old format for auto_learn
+        if intent.get("primary_intent") == "memory":
+            memory_intent = intent.get("memory_intent", {})
+            intent = {
+                "intent": memory_intent.get("intent", "normal_chat"),
+                "entity": memory_intent.get("entity", ""),
+                "attribute": memory_intent.get("attribute", ""),
+                "value": memory_intent.get("value", ""),
+                "domain": memory_intent.get("domain", "personal")
+            }
+        else:
+            intent = {"intent": "normal_chat"}
     
     # Default domain for memory ops
     if intent.get("intent") == "add_core_identity":
@@ -2989,6 +3055,28 @@ def auto_learn(user_input, working_memory):
     """Auto-learn from user input - ENHANCED VERSION"""
     now = datetime.now().isoformat(timespec="seconds")
     
+    # Try unified intent first, fall back to old intent
+    try:
+        # Use cached version if possible
+        context = st.session_state.get('financial_context', {})
+        unified_intent = cached_extract_unified_intent(user_input, context)
+        
+        if unified_intent.get("primary_intent") == "memory":
+            memory_intent = unified_intent.get("memory_intent", {})
+            intent = {
+                "intent": memory_intent.get("intent", "normal_chat"),
+                "entity": memory_intent.get("entity", ""),
+                "attribute": memory_intent.get("attribute", ""),
+                "value": memory_intent.get("value", ""),
+                "domain": memory_intent.get("domain", "personal")
+            }
+        else:
+            # Fall back to old intent system for compatibility
+            intent = extract_intent(user_input)
+    except Exception as e:
+        print(f"Intent extraction error in auto_learn: {e}")
+        intent = extract_intent(user_input)  # Fallback to old system
+
     # -----------------------------
     # ORIGINAL CONFIDENCE DECAY LOGIC
     # -----------------------------
@@ -3134,6 +3222,9 @@ def auto_learn(user_input, working_memory):
 def main():
     """Main Streamlit app function."""
     global CURRENT_MODE, UI_STATUS
+
+    # Initialize session FIRST
+    ensure_session_initialized()
     
     st.set_page_config(page_title="AI Agent", layout="wide")
     
