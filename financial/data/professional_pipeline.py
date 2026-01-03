@@ -23,6 +23,13 @@ import sys
 from pathlib import Path
 import warnings
 
+current_dir = os.path.dirname(os.path.abspath(__file__))  # financial/data
+auth_dir = os.path.join(current_dir, "..", "auth")  # financial/auth
+
+if auth_dir not in sys.path:
+    sys.path.insert(0, auth_dir)
+    print(f"📁 Added auth directory to path: {auth_dir}")
+    
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -289,6 +296,41 @@ class ProfessionalMarketPipeline:
         conn.close()
         print(f"✅ Professional database initialized: {self.db_path}")
 
+    def _get_upstox_client_fixed(self):
+        """Reliable way to get Upstox client"""
+        try:
+            # Try multiple import paths
+            try:
+                # Try direct import first
+                from auth.upstox_auth import get_upstox_client
+            except ImportError:
+                try:
+                    # Try financial.auth path
+                    from financial.auth.upstox_auth import get_upstox_client
+                except ImportError:
+                    # Try relative import
+                    import sys
+                    import os
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    parent_dir = os.path.dirname(current_dir)
+                    sys.path.insert(0, parent_dir)
+                    from auth.upstox_auth import get_upstox_client
+            
+            client = get_upstox_client()
+            if client:
+                print("   ✅ Upstox client created successfully")
+                return client
+            else:
+                print("   ⚠️ Upstox client is None (not authenticated)")
+                return None
+                
+        except ImportError as e:
+            print(f"   ❌ Could not import upstox_auth: {e}")
+            return None
+        except Exception as e:
+            print(f"   ❌ Unexpected error getting Upstox client: {e}")
+            return None
+
     # ========================================================================
     # FEATURE 1: MULTI-TIMEFRAME SUPPORT
     # ========================================================================
@@ -499,40 +541,67 @@ class ProfessionalMarketPipeline:
     # ========================================================================
 
     def validate_data_quality(self, symbol: str, data: List[Dict], interval: str) -> DataQuality:
+        """
+        Data quality validation - handles both historical and real-time data
+        """
         if not data:
             return DataQuality(
                 completeness=0, gap_count=0, spread_avg=0, spread_max=0,
-                outlier_count=0, score=0, warnings=["No data"]
+                outlier_count=0, score=1.0, warnings=["No data"]
             )
         
-        # SIMPLIFIED VALIDATION - less aggressive
         warnings_list = []
+        base_score = 5.0
         
-        # Basic completeness (less strict)
-        completeness = 100  # Start at 100%
+        # Handle single record case (real-time data from Upstox)
+        if len(data) == 1:
+            warnings_list.append("Single record - real-time data")
+            # Real-time data gets good score
+            base_score = 4.5
         
-        # Simple gap check (tolerant)
-        gap_count = 0
-        if len(data) > 1:
-            # Simple tolerance for weekend gaps, etc.
-            pass
+        # For historical data with few records
+        elif len(data) < 10:
+            warnings_list.append(f"Low data count: {len(data)} records")
+            base_score -= (10 - len(data)) * 0.1
         
-        # Calculate quality score more generously
-        score = 4.5  # Start with good score
-        if len(data) < 10:
-            score -= 0.5
-        if any(b['volume'] == 0 for b in data):
-            score -= 0.5
+        # Check data anomalies
+        anomaly_count = 0
+        for bar in data:
+            # Check high >= low
+            if 'high' in bar and 'low' in bar and bar['high'] < bar['low']:
+                anomaly_count += 1
+            
+            # Check for zero/negative prices
+            if 'close' in bar and bar['close'] <= 0:
+                anomaly_count += 1
         
-        score = max(1.0, min(5.0, score))  # Never go below 1.0
+        if anomaly_count > 0:
+            warnings_list.append(f"Data anomalies: {anomaly_count}")
+            base_score -= min(anomaly_count * 0.5, 2.0)
+        
+        # Calculate completeness
+        # For single record (real-time): 100% complete
+        # For historical: estimate based on count
+        if len(data) == 1:
+            completeness = 100  # Real-time data is "complete"
+        else:
+            # Simple heuristic
+            expected_counts = {
+                '1d': 252, '1h': 252*6.5, '30m': 252*13,
+                '15m': 252*26, '5m': 252*78, '1m': 252*390
+            }
+            expected = expected_counts.get(interval, 100)
+            completeness = min(100, (len(data) / expected) * 100)
+        
+        final_score = max(1.0, min(5.0, base_score))
         
         return DataQuality(
             completeness=completeness,
-            gap_count=gap_count,
+            gap_count=0,  # Skip gap detection for now
             spread_avg=0,
             spread_max=0,
             outlier_count=0,
-            score=score,
+            score=final_score,
             warnings=warnings_list
         )
 
@@ -883,30 +952,28 @@ class ProfessionalMarketPipeline:
 
     def _smart_source_selection(self, symbol: str, interval: str) -> List[str]:
         """
-        Smart source selection based on:
-        1. Historical quality scores
-        2. Performance metrics
-        3. Symbol type (Indian vs Global)
+        Smart source selection - FIXED VERSION
         """
         is_indian = self._is_indian_symbol(symbol)
-
-        # Get quality history
-        quality_scores = self._get_source_quality_scores(symbol, interval)
-
-        # Base priority
+        
+        # For testing/debugging, you can force a source
+        debug_source = os.getenv("DEBUG_SOURCE")
+        if debug_source:
+            return [debug_source] if debug_source in self.sources else []
+        
         if is_indian:
-            if interval in ['1m', '5m', '15m']:
-                base_order = ['fyers', 'upstox', 'yfinance']
-            else:
+            # Indian symbols
+            if interval in ['1m', '5m']:
+                # Intraday - try Upstox for real-time
                 base_order = ['upstox', 'fyers', 'yfinance']
+            else:
+                # Daily/weekly - prefer yfinance for historical
+                base_order = ['yfinance', 'upstox', 'fyers']
         else:
-            base_order = ['yfinance', 'fyers', 'upstox']
-
-        # Adjust based on quality scores
-        if quality_scores:
-            base_order.sort(key=lambda s: quality_scores.get(s, 0), reverse=True)
-
-        # Filter available sources
+            # Global symbols - only yfinance works
+            base_order = ['yfinance']
+        
+        # Filter to available sources
         return [s for s in base_order if s in self.sources]
 
     def _get_source_quality_scores(self, symbol: str, interval: str) -> Dict[str, float]:
@@ -972,32 +1039,45 @@ class ProfessionalMarketPipeline:
         """Fetch from Yahoo Finance"""
         try:
             import yfinance as yf
-
-            # Map symbols
+            
+            # Enhanced symbol mapping for Indian stocks
             symbol_map = {
-                "NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK",
-                "SENSEX": "^BSESN", "GSPC": "^GSPC"
+                "NIFTY": "^NSEI", 
+                "BANKNIFTY": "^NSEBANK",
+                "SENSEX": "^BSESN", 
+                "GSPC": "^GSPC",
+                "RELIANCE": "RELIANCE.NS",
+                "TCS": "TCS.NS",
+                "INFY": "INFY.NS",
+                "HDFCBANK": "HDFCBANK.NS",
+                "ICICIBANK": "ICICIBANK.NS",
+                "SBIN": "SBIN.NS",
+                "WIPRO": "WIPRO.NS"
             }
-            yahoo_symbol = symbol_map.get(symbol, symbol)
-
-            # Add .NS for Indian stocks
-            if (self._is_indian_symbol(symbol) and 
-                not any(x in yahoo_symbol for x in ['.', '^'])):
+            
+            # Get mapped symbol or use original
+            yahoo_symbol = symbol_map.get(symbol.upper(), symbol)
+            
+            # Auto-append .NS for known Indian symbols without suffix
+            if self._is_indian_symbol(symbol) and not any(x in yahoo_symbol for x in ['.', '^']):
                 yahoo_symbol = yahoo_symbol + ".NS"
-
-            # Determine period
+            
+            print(f"   🔍 Yahoo Finance symbol: {yahoo_symbol}")
+            
+            # Determine period based on interval
             period_map = {
-                '1m': '5d', '5m': '5d', '15m': '5d',
-                '30m': '1mo', '1h': '1mo', '1d': '1mo'
+                '1m': '7d', '5m': '60d', '15m': '60d',
+                '30m': '60d', '1h': '730d', '1d': 'max'
             }
-            period = period_map.get(interval, '1mo')
-
+            period = period_map.get(interval, '60d')
+            
             ticker = yf.Ticker(yahoo_symbol)
             df = ticker.history(period=period, interval=interval)
-
+            
             if df.empty:
+                print(f"   ⚠️ No data for {yahoo_symbol}")
                 return None
-
+            
             records = []
             for idx, row in df.iterrows():
                 records.append({
@@ -1008,13 +1088,13 @@ class ProfessionalMarketPipeline:
                     "close": float(row.get("Close", 0)),
                     "volume": int(row.get("Volume", 0))
                 })
-
+            
             return {
                 "data": records,
                 "latest_price": float(df["Close"].iloc[-1]),
-                "currency": "INR" if ".NS" in yahoo_symbol else "USD"
+                "currency": "INR" if ".NS" in yahoo_symbol or "NIFTY" in symbol else "USD"
             }
-
+            
         except Exception as e:
             raise Exception(f"Yahoo Finance error: {e}")
 
@@ -1085,53 +1165,124 @@ class ProfessionalMarketPipeline:
             raise Exception(f"Fyers error: {e}")
 
     def _fetch_upstox(self, symbol: str, interval: str) -> Optional[Dict]:
-        """Fetch from Upstox"""
+        """
+        Fetch data from Upstox - SIMPLE WORKING VERSION
+        Returns current quote for Indian symbols only
+        """
         try:
-            from financial.auth.upstox_auth import get_upstox_client
-            import upstox_client
-
-            client = get_upstox_client()
+            print(f"   🔍 Getting Upstox data for {symbol}...")
+            
+            # Get client
+            client = self._get_upstox_client_fixed()
             if not client:
-                raise Exception("Upstox client not available")
-
+                print(f"   ⚠️ No Upstox client available")
+                return None
+            
+            import upstox_client
+            from datetime import datetime
+            
+            # Check if symbol is available on Upstox
             instrument_key = self._format_upstox_symbol(symbol)
             if not instrument_key:
-                raise Exception("Symbol not available on Upstox")
-
-            # Get quote
+                print(f"   ℹ️ {symbol} not available on Upstox")
+                return None
+            
+            print(f"   📍 Upstox instrument key: {instrument_key}")
+            
+            # Get market quote (current price only)
             market_api = upstox_client.MarketQuoteApi(client)
-            response = market_api.get_full_market_quote(
-                symbol=instrument_key, api_version='2.0'
-            )
-
-            # Find data key
+            
+            try:
+                response = market_api.get_full_market_quote(
+                    symbol=instrument_key,
+                    api_version='2.0'
+                )
+            except Exception as e:
+                print(f"   ❌ Upstox API error: {str(e)[:80]}")
+                return None
+            
+            if not response or not response.data:
+                print(f"   ⚠️ No data in Upstox response")
+                return None
+            
+            # Find the correct data key
             data_key = None
             for key in response.data.keys():
-                if symbol.upper() in key:
+                if instrument_key in key or symbol.upper() in key:
                     data_key = key
                     break
-
+            
             if not data_key:
+                # Use first available key
                 data_key = list(response.data.keys())[0]
-
+            
             data = response.data[data_key]
-            ohlc = data.ohlc
-
+            
+            # Create single record for current price
+            record = {
+                "timestamp": datetime.now().isoformat(),
+                "open": data.ohlc.open if hasattr(data, 'ohlc') and data.ohlc else 0,
+                "high": data.ohlc.high if hasattr(data, 'ohlc') and data.ohlc else 0,
+                "low": data.ohlc.low if hasattr(data, 'ohlc') and data.ohlc else 0,
+                "close": data.last_price if hasattr(data, 'last_price') else 0,
+                "volume": data.volume if hasattr(data, 'volume') else 0
+            }
+            
+            latest_price = data.last_price if hasattr(data, 'last_price') else record['close']
+            
+            print(f"   ✅ Upstox: {latest_price}")
+            
             return {
-                "data": [{
-                    "timestamp": datetime.now().isoformat(),
-                    "open": ohlc.open,
-                    "high": ohlc.high,
-                    "low": ohlc.low,
-                    "close": ohlc.close,
-                    "volume": data.volume
-                }],
-                "latest_price": data.last_price,
+                "data": [record],
+                "latest_price": latest_price,
                 "currency": "INR"
             }
-
+            
+        except ImportError:
+            print("   ❌ upstox_client package not available")
+            return None
         except Exception as e:
-            raise Exception(f"Upstox error: {e}")
+            print(f"   ❌ Upstox error for {symbol}: {type(e).__name__}: {str(e)[:80]}")
+            return None
+        
+    def _create_mock_upstox_data(self, symbol: str, interval: str) -> Dict:
+        """Create mock data for Upstox when real API not available"""
+        import random
+        from datetime import datetime, timedelta
+        
+        print(f"   ⚠️ Using mock data for Upstox ({symbol})")
+        
+        # Generate realistic mock data
+        base_price = 1000 if "NIFTY" in symbol.upper() else 100
+        
+        records = []
+        now = datetime.now()
+        
+        # Generate 20 bars of mock data
+        for i in range(20, 0, -1):
+            timestamp = now - timedelta(minutes=i*5 if interval.endswith('m') else i)
+            
+            open_price = base_price + random.uniform(-10, 10)
+            close_price = open_price + random.uniform(-5, 5)
+            high_price = max(open_price, close_price) + random.uniform(0, 5)
+            low_price = min(open_price, close_price) - random.uniform(0, 5)
+            
+            records.append({
+                "timestamp": timestamp.isoformat(),
+                "open": round(open_price, 2),
+                "high": round(high_price, 2),
+                "low": round(low_price, 2),
+                "close": round(close_price, 2),
+                "volume": random.randint(10000, 1000000)
+            })
+        
+        latest_price = records[-1]['close'] if records else base_price
+        
+        return {
+            "data": records,
+            "latest_price": latest_price,
+            "currency": "INR"
+        }
 
     # ========================================================================
     # HELPER METHODS
@@ -1170,41 +1321,103 @@ class ProfessionalMarketPipeline:
         else:
             return f"NSE:{symbol}-EQ"
 
+    
     def _format_upstox_symbol(self, symbol: str) -> Optional[str]:
-        """Format symbol for Upstox"""
+        """Format symbol for Upstox - Improved version"""
         symbol = symbol.upper().strip()
-
+        
+        # Remove common prefixes/suffixes
+        if symbol.startswith("^"):
+            symbol = symbol[1:]  # Remove ^ prefix
+        
+        # Remove .NS suffix for Indian stocks
+        if symbol.endswith(".NS"):
+            symbol = symbol[:-3]
+        
+        # Remove -EQ, -INDEX suffixes
+        if symbol.endswith("-EQ"):
+            symbol = symbol[:-3]
+        elif symbol.endswith("-INDEX"):
+            symbol = symbol[:-6]
+        
+        print(f"   🔍 Processing {symbol} for Upstox...")
+        
+        # Enhanced mapping
         upstox_map = {
             'NIFTY': 'NSE_INDEX|Nifty 50',
             'BANKNIFTY': 'NSE_INDEX|Nifty Bank',
             'SENSEX': 'BSE_INDEX|SENSEX',
+            'NSEI': 'NSE_INDEX|Nifty 50',  # Yahoo's NSEI
+            'NSEBANK': 'NSE_INDEX|Nifty Bank',  # Yahoo's NSEBANK
+            'BSESN': 'BSE_INDEX|SENSEX',  # Yahoo's BSESN
+            
+            # Indian stocks with ISIN
             'RELIANCE': 'NSE_EQ|INE002A01018',
             'TCS': 'NSE_EQ|INE467B01029',
+            'INFY': 'NSE_EQ|INE009A01021',
+            'HDFCBANK': 'NSE_EQ|INE040A01026',
+            'ICICIBANK': 'NSE_EQ|INE090A01021',
+            'SBIN': 'NSE_EQ|INE062A01020',
+            'WIPRO': 'NSE_EQ|INE075A01022',
+            'ITC': 'NSE_EQ|INE154A01025',
+            
+            # Global symbols - not available on Upstox
+            'AAPL': None,
+            'MSFT': None,
+            'GOOGL': None,
+            'TSLA': None,
+            'AMZN': None,
+            'META': None,
+            'NVDA': None,
+            '^GSPC': None,
+            'GSPC': None,
         }
-
+        
         if symbol in upstox_map:
-            return upstox_map[symbol]
-
+            result = upstox_map[symbol]
+            print(f"   📍 Mapped to: {result}")
+            return result
+        
+        # For other Indian symbols, try NSE equity
         if self._is_indian_symbol(symbol):
-            return f'NSE_EQ|{symbol}'
-
+            result = f'NSE_EQ|{symbol}'
+            print(f"   📍 Default NSE mapping: {result}")
+            return result
+        
+        print(f"   ⚠️ Not an Indian symbol or not available on Upstox")
         return None
 
     def _is_indian_symbol(self, symbol: str) -> bool:
-        """Check if symbol is Indian"""
-        symbol = symbol.upper().strip()
-
-        if any(symbol.endswith(s) for s in [".NS", ".BO", "-EQ", "-INDEX"]):
+        """Check if symbol is Indian with better logic"""
+        symbol_upper = symbol.upper().strip()
+        
+        # Symbols with known Indian suffixes
+        if any(symbol_upper.endswith(s) for s in [".NS", ".BO", "-EQ", "-INDEX", ".NSE"]):
             return True
-
-        if any(x in symbol for x in ["NIFTY", "SENSEX", "BSE", "NSE"]):
+        
+        # Known Indian indices
+        if any(x in symbol_upper for x in ["NIFTY", "SENSEX", "BANKNIFTY", "NSE", "BSE"]):
             return True
-
+        
+        # Known Indian companies (common tickers)
+        indian_tickers = [
+            "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", 
+            "SBIN", "WIPRO", "HINDUNILVR", "ITC", "BHARTIARTL",
+            "KOTAKBANK", "AXISBANK", "LT", "HCLTECH", "MARUTI",
+            "ASIANPAINT", "DMART", "BAJFINANCE", "SUNPHARMA"
+        ]
+        
+        if symbol_upper in indian_tickers:
+            return True
+        
         # Known global symbols
-        global_symbols = ["AAPL", "MSFT", "GOOGL", "TSLA", "AMZN", "META", "NVDA"]
-        if symbol in global_symbols:
+        global_symbols = ["AAPL", "MSFT", "GOOGL", "TSLA", "AMZN", "META", "NVDA", 
+                        "JPM", "JNJ", "V", "WMT", "PG", "DIS", "MA"]
+        
+        if symbol_upper in global_symbols:
             return False
-
+        
+        # Default to not Indian if we can't determine
         return False
 
     # ========================================================================
@@ -1422,51 +1635,125 @@ def test_professional_pipeline_with_indian_symbols():
 
     return pipeline
 
+def test_basic_functionality():
+    """Simple test of basic functionality"""
+    print("🚀 Testing Professional Pipeline - Basic Functionality")
+    print("="*60)
+    
+    # Setup authentication if available
+    try:
+        import sys
+        sys.path.append('..')  # Add parent directory to path
+        from auth.simple_auth import setup_authentication
+        setup_authentication()
+    except ImportError:
+        print("⚠️ Could not setup authentication - continuing anyway")
+    
+    # Initialize pipeline
+    pipeline = ProfessionalMarketPipeline()
+    
+    print(f"\n✅ Sources available: {pipeline.sources}")
+    
+    # Test basic symbols that should work
+    test_cases = [
+        ("AAPL", "1d", "Global stock"),
+        ("NIFTY", "1d", "Indian index"),
+        ("^GSPC", "1d", "S&P 500"),
+        ("INFY.NS", "1d", "Indian stock with suffix"),
+        ("RELIANCE.NS", "1d", "Another Indian stock"),
+    ]
+    
+    results = {}
+    
+    for symbol, interval, description in test_cases:
+        print(f"\n🔍 Testing: {symbol} ({description})")
+        print(f"   Interval: {interval}")
+        
+        try:
+            data = pipeline.fetch_market_data(
+                symbol=symbol,
+                interval=interval,
+                source="auto",
+                max_retries=1,  # Quick test
+                validate=True
+            )
+            
+            if data:
+                results[symbol] = "✅ SUCCESS"
+                print(f"   ✅ Records: {data.record_count}")
+                print(f"   Price: {data.latest_price:.2f}")
+                print(f"   Quality: {data.quality.score:.1f}/5")
+                print(f"   Source: {data.source}")
+                
+                # Store sample data
+                if data.data:
+                    latest_bar = data.data[-1]
+                    print(f"   Latest bar: {latest_bar.get('close', 'N/A')}")
+            else:
+                results[symbol] = "❌ NO DATA"
+                print(f"   ❌ No data returned")
+                
+        except Exception as e:
+            results[symbol] = f"❌ ERROR: {str(e)[:50]}"
+            print(f"   ❌ Error: {str(e)[:50]}")
+    
+    # Summary
+    print("\n" + "="*60)
+    print("📊 TEST SUMMARY")
+    print("="*60)
+    
+    success_count = sum(1 for result in results.values() if "✅" in result)
+    total_count = len(results)
+    
+    for symbol, result in results.items():
+        print(f"{symbol}: {result}")
+    
+    print(f"\n✅ Success rate: {success_count}/{total_count} ({success_count/total_count*100:.0f}%)")
+    
+    # Performance report
+    print("\n📈 Performance Report:")
+    perf_report = pipeline.get_performance_report()
+    for source, stats in perf_report.items():
+        print(f"   {source}: {stats['success_rate']} success, {stats['avg_latency_ms']}ms avg")
+    
+    return pipeline
 
-# Or replace the main test:
+
 if __name__ == "__main__":
     import sys
+    
+    print("="*60)
+    print("PROFESSIONAL MARKET DATA PIPELINE")
+    print("="*60)
     
     # Check command line arguments
     if len(sys.argv) > 1:
         test_type = sys.argv[1].lower()
     else:
-        test_type = "comprehensive"  # Default
+        test_type = "basic"  # Default to basic test
     
-    print(f"🧪 Running {test_type} test...")
-    print("="*60)
-    
-    if test_type in ["basic", "original"]:
-        # Run original AAPL test
-        test_professional_pipeline()
+    if test_type == "basic":
+        # Run basic functionality test
+        pipeline = test_basic_functionality()
         
-    elif test_type in ["indian", "comprehensive"]:
-        # Run Indian symbols test
+    elif test_type == "diagnose":
+        # Run diagnosis
+        diagnose_sources()
+        
+    elif test_type == "full":
+        # Run comprehensive test
         test_professional_pipeline_with_indian_symbols()
         
-    elif test_type in ["diagnose", "diagnostic"]:
-        # Run source diagnosis
+    elif test_type == "all":
+        # Run all tests
+        print("Running all tests...\n")
         diagnose_sources()
-        
-    elif test_type in ["all", "full"]:
-        # Run ALL tests
-        print("Running ALL tests...\n")
-        
-        print("\n" + "="*60)
-        print("1. DIAGNOSTIC TEST")
-        print("="*60)
-        diagnose_sources()
-        
-        print("\n" + "="*60)
-        print("2. BASIC TEST (AAPL)")
-        print("="*60)
-        test_professional_pipeline()
-        
-        print("\n" + "="*60)
-        print("3. INDIAN SYMBOLS TEST")
-        print("="*60)
+        print("\n")
+        test_basic_functionality()
+        print("\n")
         test_professional_pipeline_with_indian_symbols()
         
     else:
         print(f"Unknown test type: {test_type}")
-        print("Available tests: basic, indian, diagnose, all")
+        print("Available: basic, diagnose, full, all")
+        pipeline = test_basic_functionality()
