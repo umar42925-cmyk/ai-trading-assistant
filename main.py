@@ -1179,45 +1179,146 @@ def detect_market_query(text: str):
     
     return detected if detected else None
 
-def handle_market_query(user_input, market_queries, current_mode):
-    """Handle market data queries"""
-    # Check if financial_tools is available
-    if not MARKET_TOOLS_AVAILABLE or financial_tools is None:
+def handle_market_query_intelligent(user_input: str, current_mode: str) -> dict:
+    """Intelligently handle financial queries based on intent."""
+    
+    if not MARKET_TOOLS_AVAILABLE or not financial_tools:
         return {
-            "response": "Financial analysis tools are not available right now.",
+            "response": "Financial tools are not available.",
             "status": UI_STATUS,
             "mode": current_mode
         }
     
-    responses = []
+    # Extract financial intent
+    fin_intent = extract_financial_intent(user_input)
     
-    for query in market_queries:
-        symbol = query['symbol']
-        
-        # Get market data
+    intent_type = fin_intent.get("intent")
+    
+    # Route to appropriate handler
+    if intent_type == "basic_price":
+        symbol = fin_intent.get("symbol")
         data = enhanced_get_market_data(symbol)
         
         if data.get('status') == 'ok':
-            # Format the response
-            try:
-                insight = financial_tools.format_market_insight(query['name'].upper(), data)
-                analysis = financial_tools.analyze_stock_for_agent(symbol)
-                response = f"{insight}\n\n{analysis}"
-            except Exception as e:
-                response = f"📊 {query['name'].upper()}: ₹{data.get('price', 0):.2f} (Basic price data)"
-        else:
-            response = f"⚠️ Could not fetch data for {query['name']}"
+            return {
+                "response": f"📊 {symbol}: ₹{data['price']:.2f} (Source: {data['source']})",
+                "status": UI_STATUS,
+                "mode": current_mode
+            }
+    
+    elif intent_type == "technical_analysis":
+        symbol = fin_intent.get("symbol")
+        indicators = fin_intent.get("indicators", [])
         
-        responses.append(response)
+        response_parts = [f"📊 TECHNICAL ANALYSIS: {symbol}\n" + "="*50]
+        
+        # Get requested indicators
+        if "rsi" in indicators:
+            rsi = financial_tools.calculate_rsi(symbol)
+            if rsi:
+                signal = "Overbought 🔴" if rsi > 70 else "Oversold 🟢" if rsi < 30 else "Neutral 🟡"
+                response_parts.append(f"\nRSI(14): {rsi:.1f} - {signal}")
+        
+        if "ma" in indicators:
+            mas = financial_tools.calculate_moving_averages(symbol)
+            if mas:
+                response_parts.append("\nMoving Averages:")
+                for period, value in mas.items():
+                    response_parts.append(f"  MA{period}: ₹{value:.2f}")
+        
+        if "volatility" in indicators:
+            vol = financial_tools.calculate_volatility(symbol)
+            if vol:
+                risk = "High 🔴" if vol > 40 else "Medium 🟡" if vol > 20 else "Low 🟢"
+                response_parts.append(f"\nVolatility: {vol:.1f}% - {risk}")
+        
+        # Add current price
+        data = enhanced_get_market_data(symbol)
+        if data.get('status') == 'ok':
+            response_parts.append(f"\nCurrent Price: ₹{data['price']:.2f}")
+        
+        return {
+            "response": "\n".join(response_parts),
+            "status": UI_STATUS,
+            "mode": current_mode
+        }
     
-    # Combine all responses
-    final_response = "\n\n".join(responses)
+    elif intent_type == "comprehensive_report":
+        symbol = fin_intent.get("symbol")
+        report = financial_tools.generate_comprehensive_report(symbol)
+        
+        return {
+            "response": report,
+            "status": UI_STATUS,
+            "mode": current_mode
+        }
     
-    return {
-        "response": final_response,
-        "status": UI_STATUS,
-        "mode": current_mode
-    }
+    elif intent_type == "comparison":
+        symbols = fin_intent.get("symbols", [])
+        
+        if len(symbols) < 2:
+            return {
+                "response": "Please specify at least 2 stocks to compare.",
+                "status": UI_STATUS,
+                "mode": current_mode
+            }
+        
+        response_parts = [f"📊 COMPARISON: {' vs '.join(symbols)}\n" + "="*60]
+        
+        for symbol in symbols:
+            analysis = financial_tools.analyze_stock_for_agent(symbol, detailed=False)
+            response_parts.append(f"\n{analysis}")
+        
+        # Add summary
+        response_parts.append("\n💡 QUICK COMPARISON:")
+        for symbol in symbols:
+            data = enhanced_get_market_data(symbol)
+            if data.get('status') == 'ok':
+                response_parts.append(f"  {symbol}: ₹{data['price']:.2f}")
+        
+        return {
+            "response": "\n".join(response_parts),
+            "status": UI_STATUS,
+            "mode": current_mode
+        }
+    
+    elif intent_type == "risk_analysis":
+        symbol = fin_intent.get("symbol")
+        
+        response_parts = [f"⚠️ RISK ANALYSIS: {symbol}\n" + "="*50]
+        
+        vol = financial_tools.calculate_volatility(symbol)
+        if vol:
+            risk = "High 🔴" if vol > 40 else "Medium 🟡" if vol > 20 else "Low 🟢"
+            response_parts.append(f"\nVolatility: {vol:.1f}% - {risk}")
+        
+        sharpe = financial_tools.calculate_sharpe_ratio(symbol)
+        if sharpe:
+            rating = "Excellent 🟢" if sharpe > 2 else "Good 🟡" if sharpe > 1 else "Poor 🔴"
+            response_parts.append(f"Sharpe Ratio: {sharpe:.2f} - {rating}")
+        
+        # Add current price context
+        data = enhanced_get_market_data(symbol)
+        if data.get('status') == 'ok':
+            response_parts.append(f"\nCurrent Price: ₹{data['price']:.2f}")
+        
+        return {
+            "response": "\n".join(response_parts),
+            "status": UI_STATUS,
+            "mode": current_mode
+        }
+    
+    elif intent_type == "market_overview":
+        # Get NIFTY overview
+        analysis = financial_tools.analyze_stock_for_agent("NIFTY", detailed=True)
+        return {
+            "response": f"📊 MARKET OVERVIEW\n\n{analysis}",
+            "status": UI_STATUS,
+            "mode": current_mode
+        }
+    
+    # Fallback: not financial or unclear
+    return None  # Let main LLM handle it
 
 def check_goal_progress(user_input: str, vector_memory):
     """Check if user mentions goal progress"""
@@ -1526,6 +1627,59 @@ USER MESSAGE
     except Exception as e:
         print(f"Intent extraction error: {str(e)}")
         return {"intent": "normal_chat"}  # Safe fallback
+
+def extract_financial_intent(user_input: str) -> dict:
+    """Extract financial analysis intent from user input."""
+    
+    prompt = f"""
+You are a financial query classifier for an AI trading assistant.
+
+Analyze this user query and return STRICT JSON ONLY.
+
+User Query: "{user_input}"
+
+Classify into ONE of these intents:
+
+1. basic_price - User wants just current price
+   Schema: {{"intent": "basic_price", "symbol": "<symbol>"}}
+
+2. technical_analysis - User wants technical indicators (RSI, MA, etc.)
+   Schema: {{"intent": "technical_analysis", "symbol": "<symbol>", "indicators": ["rsi", "ma", "volatility"]}}
+
+3. comprehensive_report - User wants detailed/full analysis
+   Schema: {{"intent": "comprehensive_report", "symbol": "<symbol>"}}
+
+4. comparison - User wants to compare multiple stocks
+   Schema: {{"intent": "comparison", "symbols": ["SYMBOL1", "SYMBOL2"]}}
+
+5. risk_analysis - User wants risk metrics
+   Schema: {{"intent": "risk_analysis", "symbol": "<symbol>"}}
+
+6. market_overview - General market question
+   Schema: {{"intent": "market_overview"}}
+
+7. not_financial - Not a financial query
+   Schema: {{"intent": "not_financial"}}
+
+Examples:
+- "What's RELIANCE price?" → {{"intent": "basic_price", "symbol": "RELIANCE"}}
+- "Give me RSI of TCS" → {{"intent": "technical_analysis", "symbol": "TCS", "indicators": ["rsi"]}}
+- "Comprehensive report on INFY" → {{"intent": "comprehensive_report", "symbol": "INFY"}}
+- "Compare RELIANCE and TCS" → {{"intent": "comparison", "symbols": ["RELIANCE", "TCS"]}}
+
+Return ONLY valid JSON. No explanation.
+"""
+    
+    try:
+        resp = client.chat.completions.create(
+            model="route-llm",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        return json.loads(resp.choices[0].message.content)
+    except Exception as e:
+        print(f"Financial intent extraction error: {e}")
+        return {"intent": "not_financial"}
 
 def get_latest_identity_audit(entity: str, attribute: str):
     """Get latest identity audit entry."""
@@ -2215,12 +2369,15 @@ def process_user_input(user_input: str, conversation_history: list = None) -> di
     if new_mode != CURRENT_MODE:
         CURRENT_MODE = new_mode
     
-     # --- ENHANCED: MARKET DATA QUERY DETECTION ---
-    market_queries = detect_market_query(user_input)
-    
-    if market_queries:
-        # Handle market data queries
-        return handle_market_query(user_input, market_queries, CURRENT_MODE)
+    # --- ENHANCED: INTELLIGENT FINANCIAL QUERY ROUTING ---
+    fin_intent = extract_financial_intent(user_input)
+
+    if fin_intent.get("intent") != "not_financial":
+        result = handle_market_query_intelligent(user_input, CURRENT_MODE)
+        
+        if result:  # If handled by financial router
+            return result
+        # Otherwise, fall through to main LLM
     
     # --- Live market data ---
     if requires_live_price(user_input):
