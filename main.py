@@ -2038,15 +2038,25 @@ Return ONLY valid JSON. No explanation.
 # Update cached_extract_unified_intent:
 def cached_extract_unified_intent(user_input: str, context: dict = None) -> dict:
     """Cached version of intent extraction."""
-    # SKIP CACHE for very short social utterances
+    # SKIP CACHE for very short social utterances BUT STILL CACHE THE RESULT
     if len(user_input.split()) <= 3:
         words = user_input.lower().split()
         small_talk = {"hi", "hello", "hey", "ok", "good", "yes", "no", "thanks", "thank"}
         if any(word in small_talk for word in words):
-            print("⏩ Skipping cache for small talk")
-            return extract_unified_intent(user_input, context)
+            print("⏩ Skipping LLM for small talk")
+            # Create cache key for small talk
+            cache_key = make_cache_key("intent_small", user_input)
+            cached = intent_cache.get(cache_key)
+            if cached:
+                print("⚡ Small talk cache HIT")
+                return cached
+            
+            # Return predefined intent for small talk
+            result = {"primary_intent": "normal_chat"}
+            intent_cache.set(cache_key, result, ttl=300)
+            return result
     
-    # Use stable cache key
+    # Use stable cache key for regular queries
     cache_key = make_cache_key("intent", user_input, context)
     
     cached = intent_cache.get(cache_key)
@@ -2058,7 +2068,6 @@ def cached_extract_unified_intent(user_input: str, context: dict = None) -> dict
     result = extract_unified_intent(user_input, context)
     intent_cache.set(cache_key, result, ttl=300)
     return result
-
 # Update cached_market_data:
 def cached_market_data(symbol: str, timeframe: str = "1d") -> dict:
     """Cached version of market data fetch."""
@@ -2546,7 +2555,15 @@ def handle_financial_query_optimized(fin_intent: dict, current_mode: str) -> dic
             return {
                 "response": f"📊 {symbol}: ₹{data['price']:.2f} ({data['source']})",
                 "status": UI_STATUS,
-                "mode": current_mode
+                "mode": current_mode,
+                "last_symbol": symbol  # Add this for context
+            }
+        else:
+            return {
+                "response": f"❌ Could not fetch data for {symbol}",
+                "status": UI_STATUS,
+                "mode": current_mode,
+                "last_symbol": symbol  # Add this for context
             }
     
     elif intent_type == "technical_analysis":
@@ -2558,6 +2575,8 @@ def handle_financial_query_optimized(fin_intent: dict, current_mode: str) -> dic
             if rsi:
                 signal = "Overbought 🔴" if rsi > 70 else "Oversold 🟢" if rsi < 30 else "Neutral 🟡"
                 response_parts.append(f"\nRSI(14): {rsi:.1f} - {signal}")
+            else:
+                response_parts.append(f"\n❌ Could not calculate RSI for {symbol}")
         
         if "ma" in indicators:
             mas = cached_financial_tool_call('calculate_moving_averages', symbol)
@@ -2565,25 +2584,34 @@ def handle_financial_query_optimized(fin_intent: dict, current_mode: str) -> dic
                 response_parts.append("\nMoving Averages:")
                 for period, value in mas.items():
                     response_parts.append(f"  MA{period}: ₹{value:.2f}")
+            else:
+                response_parts.append("\n❌ Could not calculate Moving Averages")
         
         if "volatility" in indicators:
             vol = cached_financial_tool_call('calculate_volatility', symbol)
             if vol:
                 risk = "High 🔴" if vol > 40 else "Medium 🟡" if vol > 20 else "Low 🟢"
                 response_parts.append(f"\nVolatility: {vol:.1f}% - {risk}")
+            else:
+                response_parts.append("\n❌ Could not calculate Volatility")
         
-        data = cached_market_data(symbol)
-        if data.get('status') == 'ok':
-            response_parts.append(f"\nPrice: ₹{data['price']:.2f}")
+        # Add current price if no indicators specified
+        if not indicators:
+            data = cached_market_data(symbol)
+            if data.get('status') == 'ok':
+                response_parts.append(f"\nPrice: ₹{data['price']:.2f}")
+            response_parts.append("\nℹ️ Specify indicators like: RSI, Moving Averages, or Volatility")
         
         return {
             "response": "\n".join(response_parts),
             "status": UI_STATUS,
-            "mode": current_mode
+            "mode": current_mode,
+            "last_symbol": symbol  # Add this for context
         }
     
     elif intent_type == "comprehensive_report":
-        cache_key = f"comprehensive_{symbol}"
+        # Use proper cache key
+        cache_key = make_cache_key("comprehensive", symbol, "full_report")
         cached = indicator_cache.get(cache_key)
         
         if cached:
@@ -2591,17 +2619,26 @@ def handle_financial_query_optimized(fin_intent: dict, current_mode: str) -> dic
             return {
                 "response": cached,
                 "status": UI_STATUS,
-                "mode": current_mode
+                "mode": current_mode,
+                "last_symbol": symbol  # Important for context!
             }
         
         print(f"🔄 Generating comprehensive report: {symbol}")
         report = financial_tools.generate_comprehensive_report(symbol)
+        
+        # Cache with appropriate TTL (2 minutes)
         indicator_cache.set(cache_key, report, ttl=120)
+        
+        # Update LLM cache stats
+        llm_cache_key = make_cache_key("llm_comprehensive", symbol)
+        llm_cache.set(llm_cache_key, True, ttl=120)
+        print(f"💾 Cached comprehensive report for {symbol}")
         
         return {
             "response": report,
             "status": UI_STATUS,
-            "mode": current_mode
+            "mode": current_mode,
+            "last_symbol": symbol  # Important for context!
         }
     
     elif intent_type == "comparison":
@@ -2617,9 +2654,35 @@ def handle_financial_query_optimized(fin_intent: dict, current_mode: str) -> dic
                 rsi = cached_financial_tool_call('calculate_rsi', sym)
                 if rsi:
                     response_parts.append(f"  RSI: {rsi:.1f}")
+            else:
+                response_parts.append(f"\n❌ {sym}: Data unavailable")
         
         return {
             "response": "\n".join(response_parts),
+            "status": UI_STATUS,
+            "mode": current_mode,
+            "last_symbol": symbols[-1] if symbols else None  # Use last symbol for context
+        }
+    
+    elif intent_type == "risk_analysis":
+        # Fallback to comprehensive report for now
+        return {
+            "response": f"Risk analysis for {symbol} would go here.\n(Use comprehensive report for detailed analysis)",
+            "status": UI_STATUS,
+            "mode": current_mode,
+            "last_symbol": symbol  # Add this for context
+        }
+    
+    elif intent_type == "market_overview":
+        return {
+            "response": "Market overview would go here.",
+            "status": UI_STATUS,
+            "mode": current_mode
+        }
+    
+    elif intent_type == "not_financial":
+        return {
+            "response": "This doesn't appear to be a financial query.",
             "status": UI_STATUS,
             "mode": current_mode
         }
@@ -2980,6 +3043,40 @@ def process_user_input(user_input: str, conversation_history: list = None) -> di
     unified_intent = cached_extract_unified_intent(user_input, context)
 
     primary_intent = unified_intent.get('primary_intent')
+
+    # --- CONTEXT AWARENESS: Clear financial context if topic changed ---
+    if primary_intent != "financial":
+        # Clear financial intent but keep last symbol for reference
+        if 'financial_context' in st.session_state:
+            # Only clear the intent, keep the symbol for potential follow-ups
+            st.session_state.financial_context['last_intent'] = None
+            print("🧹 Cleared financial intent (topic changed)")
+    else:
+        # This is a financial query, save context
+        fin_intent = unified_intent.get('financial_intent', {})
+        symbol = fin_intent.get('symbol')
+        if symbol:
+            if 'financial_context' not in st.session_state:
+                st.session_state.financial_context = {}
+            st.session_state.financial_context['last_symbol'] = symbol
+            st.session_state.financial_context['last_intent'] = fin_intent.get('intent')
+            print(f"💾 Financial context saved: {symbol}")
+
+    # Direct financial routing (skips main LLM!)
+    if primary_intent == "financial":
+        fin_intent = unified_intent.get('financial_intent', {})
+        
+        # Route to optimized handler
+        result = handle_financial_query_optimized(fin_intent, CURRENT_MODE)
+        if result:
+            # Update financial context with last_symbol if provided
+            if result.get('last_symbol'):
+                if 'financial_context' not in st.session_state:
+                    st.session_state.financial_context = {}
+                st.session_state.financial_context['last_symbol'] = result['last_symbol']
+                if 'last_intent' not in st.session_state.financial_context:
+                    st.session_state.financial_context['last_intent'] = fin_intent.get('intent')
+            return result
 
     # Direct financial routing (skips main LLM!)
     if primary_intent == "financial":
