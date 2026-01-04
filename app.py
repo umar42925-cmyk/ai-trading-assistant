@@ -28,24 +28,12 @@ except ImportError as e:
     print(f"⚠️ Import warning: {e}")
     IMPORT_SUCCESS = False
     
-    # Create fallback functions if import fails
-    def process_user_input(user_input, conversation_history=None):
-        return {
-            "response": "System initializing... Please run main.py directly.",
-            "status": "Offline", 
-            "mode": "personal"
-        }
-    
-    working_memory = {"observations": []}
-    
     # Mock functions
     ENHANCED_MEMORY_AVAILABLE = False
     personality_engine = None
     pattern_recognizer = None
     vector_memory = None
     ensure_session_initialized = lambda: None
-    print(f"⚠️ Import warning: {e}")
-    IMPORT_SUCCESS = False
     
     # Create fallback functions if import fails
     def process_user_input(user_input, conversation_history=None):
@@ -55,7 +43,6 @@ except ImportError as e:
             "mode": "personal"
         }
     
-    working_memory = {"observations": []}
 
 # Import Upstox auth
 try:
@@ -674,16 +661,16 @@ if st.session_state.thinking:
         mode = st.session_state.mode
         print(f"Error in app.py processing: {e}")
     
-        # Update conversation history in OpenAI format
-        # Convert chat to OpenAI format (last 20 messages = 10 exchanges)
-        chat_messages = []
-        for speaker, text in st.session_state.chat[-20:]:  # Last 20 messages
-            if speaker == "You":
-                chat_messages.append({"role": "user", "content": text})
-            else:  # AI
-                chat_messages.append({"role": "assistant", "content": text})
-        
-        st.session_state.conversation_history = chat_messages
+    # Update conversation history in OpenAI format
+    # Convert chat to OpenAI format (last 20 messages = 10 exchanges)
+    chat_messages = []
+    for speaker, text in st.session_state.chat[-20:]:  # Last 20 messages
+        if speaker == "You":
+            chat_messages.append({"role": "user", "content": text})
+        else:  # AI
+            chat_messages.append({"role": "assistant", "content": text})
+    
+    st.session_state.conversation_history = chat_messages
     
     # Update session state
     st.session_state.status = status

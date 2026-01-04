@@ -922,6 +922,37 @@ def invalidate_symbol_cache(symbol: str):
     indicator_cache.invalidate(symbol)
     print(f"🗑️ Cleared cache for {symbol}")
 
+def normalize_text(text: str) -> str:
+    """Normalize text for cache keys."""
+    if not text:
+        return ""
+    # Lowercase, strip, remove extra whitespace
+    return " ".join(text.lower().strip().split())
+
+def stable_context_key(context: dict) -> str:
+    """Create stable context key for caching."""
+    if not context:
+        return ""
+    # Only use stable fields
+    last_symbol = context.get("last_symbol", "")
+    last_intent = context.get("last_intent", "")
+    return f"{last_symbol}:{last_intent}"
+
+def make_cache_key(prefix: str, *parts) -> str:
+    """Create stable cache key from parts."""
+    clean_parts = []
+    for p in parts:
+        if isinstance(p, str):
+            clean_parts.append(normalize_text(p))
+        elif isinstance(p, dict):
+            # Sort dict items for consistent ordering
+            clean_parts.append(str(sorted(p.items()) if p else ""))
+        elif p is None:
+            clean_parts.append("")
+        else:
+            clean_parts.append(str(p))
+    return f"{prefix}:{'|'.join(clean_parts)}"
+
 # ================================
 # CORE LLM FUNCTIONS
 # ================================
@@ -2004,11 +2035,19 @@ Return ONLY valid JSON. No explanation.
 # 👆 END OF OPTIMIZED HANDLER 👆
 # ================================
 
-    
+# Update cached_extract_unified_intent:
 def cached_extract_unified_intent(user_input: str, context: dict = None) -> dict:
     """Cached version of intent extraction."""
-    context_key = context.get('last_symbol', '') if context else ''
-    cache_key = f"intent_{user_input}_{context_key}"
+    # SKIP CACHE for very short social utterances
+    if len(user_input.split()) <= 3:
+        words = user_input.lower().split()
+        small_talk = {"hi", "hello", "hey", "ok", "good", "yes", "no", "thanks", "thank"}
+        if any(word in small_talk for word in words):
+            print("⏩ Skipping cache for small talk")
+            return extract_unified_intent(user_input, context)
+    
+    # Use stable cache key
+    cache_key = make_cache_key("intent", user_input, context)
     
     cached = intent_cache.get(cache_key)
     if cached:
@@ -2017,35 +2056,39 @@ def cached_extract_unified_intent(user_input: str, context: dict = None) -> dict
     
     print("🔄 Intent cache MISS - calling LLM")
     result = extract_unified_intent(user_input, context)
-    intent_cache.set(cache_key, result)
+    intent_cache.set(cache_key, result, ttl=300)
     return result
 
-
+# Update cached_market_data:
 def cached_market_data(symbol: str, timeframe: str = "1d") -> dict:
     """Cached version of market data fetch."""
-    cache_key = f"market_{symbol}_{timeframe}"
+    # Normalize symbol
+    normalized_symbol = symbol.upper().strip()
+    cache_key = make_cache_key("market", normalized_symbol, timeframe)
     
     cached = market_data_cache.get(cache_key)
     if cached:
-        print(f"⚡ Market data cache HIT for {symbol}")
+        print(f"⚡ Market data cache HIT for {normalized_symbol}")
         return cached
     
-    print(f"🔄 Market data cache MISS for {symbol}")
+    print(f"🔄 Market data cache MISS for {normalized_symbol}")
     result = enhanced_get_market_data(symbol, timeframe)
-    market_data_cache.set(cache_key, result)
+    market_data_cache.set(cache_key, result, ttl=60)
     return result
 
-
+# Update cached_financial_tool_call:
 def cached_financial_tool_call(method_name: str, symbol: str, *args, **kwargs) -> Any:
     """Cached wrapper for financial tool calls (RSI, MA, etc.)"""
-    cache_key = f"tool_{method_name}_{symbol}_{args}_{kwargs}"
+    # Normalize symbol
+    normalized_symbol = symbol.upper().strip()
+    cache_key = make_cache_key("indicator", method_name, normalized_symbol, args, kwargs)
     
     cached = indicator_cache.get(cache_key)
     if cached:
-        print(f"⚡ Indicator cache HIT: {method_name}({symbol})")
+        print(f"⚡ Indicator cache HIT: {method_name}({normalized_symbol})")
         return cached
     
-    print(f"🔄 Indicator cache MISS: {method_name}({symbol})")
+    print(f"🔄 Indicator cache MISS: {method_name}({normalized_symbol})")
     
     lazy_load_financial_tools()
     
@@ -2055,8 +2098,8 @@ def cached_financial_tool_call(method_name: str, symbol: str, *args, **kwargs) -
     method = getattr(financial_tools, method_name)
     result = method(symbol, *args, **kwargs)
     
-    indicator_cache.set(cache_key, result)
-    return result
+    indicator_cache.set(cache_key, result, ttl=120)
+    return result    
 
 def get_latest_identity_audit(entity: str, attribute: str):
     """Get latest identity audit entry."""
